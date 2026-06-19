@@ -109,6 +109,8 @@ export interface Snapshot {
   ball: Vec;
   /** what the ball is doing right now: dribble / shot / cross / a pass type / loose */
   ballMode: string;
+  /** role of the player on the ball (null if loose) — lets the view skip keeper recycling */
+  ownerRole: Role | null;
   players: {
     x: number;
     y: number;
@@ -1300,6 +1302,7 @@ export class Match {
             : this.ball.fromCross
               ? "cross"
               : (this.ball.passType ?? "loose"),
+      ownerRole: this.ball.owner ? this.ball.owner.role : null,
       players: this.players.map((p) => ({
         x: p.pos.x,
         y: p.pos.y,

@@ -136,9 +136,19 @@ function holdFor(type: string): number {
 function ballHold(snap: Snapshot): number {
   const m = highlightMode;
   const x = snap.ball.x;
-  if (m === "comprehensive" && (x > 66 || x < 39)) return 1.5;
-  if (m === "extended" && (x > 83 || x < 22)) return 1.2;
-  if (m === "key" && (x > 92 || x < 13)) return 1.0;
+  // Comprehensive shows the build-up through midfield and all attacks — it
+  // only skips deep defensive recycling (defenders/keeper knocking it about
+  // near their own goal with no progression).
+  if (m === "comprehensive") {
+    const r = snap.ownerRole;
+    const deepRecycle =
+      (x < 26 || x > 79) && (r === "GK" || r === "DC" || r === "DL" || r === "DR");
+    return deepRecycle ? 0 : 1.4;
+  }
+  // Extended: from the attacking third onward (build-up into the final third).
+  if (m === "extended" && (x > 68 || x < 37)) return 1.2;
+  // Key: around the box.
+  if (m === "key" && (x > 87 || x < 18)) return 1.0;
   return 0;
 }
 const isFastForward = (): boolean =>
