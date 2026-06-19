@@ -34,6 +34,11 @@ const HALF_SECONDS = 45 * 60;
 const FULL_SECONDS = 90 * 60;
 const CENTER: Vec = { x: PITCH_LENGTH / 2, y: PITCH_WIDTH / 2 };
 
+/** Pass types — chosen to fit the situation and the player's skills. */
+export type PassType = "feet" | "driven" | "through" | "lofted" | "chip";
+/** Shot types — placed/finesse, power, or a chip over the keeper. */
+export type ShotType = "placed" | "power" | "chip";
+
 interface Player {
   id: number;
   team: 0 | 1;
@@ -48,6 +53,7 @@ interface Player {
   target: Vec; // where the player wants to be this step
   baseSpeed: number; // m/s at full fitness (from pace + acceleration)
   condition: number; // 0..1 current fitness; drops with fatigue
+  decisionTimer: number; // per-player cadence between on-ball decisions
 }
 
 interface Ball {
@@ -58,6 +64,9 @@ interface Ball {
   shooter: Player | null; // set while a shot is in flight
   receiver: Player | null; // intended target of an in-flight pass (runs onto it)
   isShot: boolean;
+  shotType: ShotType | null; // type of the in-flight shot
+  passType: PassType | null; // type of the in-flight pass
+  airTimer: number; // seconds the ball is airborne (lofted/chip pass beats the ground press)
   aimY: number; // projected crossing point of the current shot (for on-target)
   judged: boolean; // whether the current shot has already been adjudicated
   cooldown: number; // seconds during which the ball cannot be controlled
@@ -131,8 +140,10 @@ export class Match {
   private rng: RNG;
   private players: Player[] = [];
   private ball: Ball;
-  private decisionTimer = 0;
   private startedSecondHalf = false;
+  /** Diagnostic counters (pass/shot type mix) — used by the headless harness. */
+  passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
+  shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0 };
   private tactics: [TeamTactics, TeamTactics];
   private weather: Weather;
   private wx: WeatherMods;
@@ -168,6 +179,9 @@ export class Match {
       shooter: null,
       receiver: null,
       isShot: false,
+      shotType: null,
+      passType: null,
+      airTimer: 0,
       aimY: 34,
       judged: false,
       cooldown: 0,
@@ -203,6 +217,7 @@ export class Match {
           // speed blends pace (top speed) and acceleration
           baseSpeed: 4.6 + ((a.pace + a.acceleration) / 2) * 0.19,
           condition: startCond,
+          decisionTimer: 0,
         });
       });
     }
@@ -254,6 +269,9 @@ export class Match {
     this.ball.shooter = null;
     this.ball.receiver = null;
     this.ball.isShot = false;
+    this.ball.airTimer = 0;
+    this.ball.passType = null;
+    this.ball.shotType = null;
     this.ball.cooldown = 0;
     this.ball.lastTeam = kickingTeam;
     // give the ball to a central player of the kicking team
@@ -272,6 +290,7 @@ export class Match {
     if (this.finished) return;
     this.time += DT;
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
+    if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
     if (this.ball.owner) this.possessionTicks[this.ball.owner.team]++;
     this.updateFatigue();
 
@@ -485,10 +504,10 @@ export class Match {
       }
     }
 
-    // periodic decision — tempo controls how quickly the carrier acts
-    this.decisionTimer -= DT;
-    if (this.decisionTimer > 0) return;
-    this.decisionTimer = 0.7 - 0.4 * t.tempo;
+    // periodic decision — per-player cadence (a "slice"), quicker at high tempo
+    owner.decisionTimer -= DT;
+    if (owner.decisionTimer > 0) return;
+    owner.decisionTimer = 0.45 - 0.2 * t.tempo; // ~0.25-0.45s
 
     const goal = this.oppGoal(owner.team);
     const dGoal = dist(owner.pos, goal);
@@ -497,14 +516,14 @@ export class Match {
 
     // goalkeepers just distribute the ball upfield
     if (owner.role === "GK") {
-      const tgt = this.bestPassTarget(owner);
-      if (tgt) this.pass(owner, tgt);
+      const gp = this.choosePass(owner, space);
+      if (gp) this.executePass(owner, gp.target, gp.type);
       return;
     }
 
     // SHOOT — decisively when in a good position. Quality combines closeness
-    // and angle (central is better than tight by the byline); space and the
-    // finishing/long-shots attribute scale it up.
+    // and angle (central beats a tight byline angle); space and finishing scale
+    // it up. Flair makes a player more willing to try from distance.
     const inRange = dGoal < 20 + this.directness(owner.team) * 4;
     let goodChance = false;
     if (inRange) {
@@ -514,117 +533,218 @@ export class Match {
           : owner.attrs.finishing * 0.4 + owner.attrs.longShots * 0.6;
       const closeness = Math.max(0, 1 - dGoal / 22);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.042;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.033;
       if (space < 2.5) shotProb *= 0.5; // crowded out
       shotProb *= 0.85 + 0.3 * t.mentality;
-      // a clear, close chance in front of goal: take it
+      shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (dGoal < 7 && angle > 0.75 && space > 4.5) shotProb = Math.max(shotProb, 0.15);
       goodChance = closeness * angle > 0.35;
       if (this.rng.chance(shotProb)) {
-        this.shoot(owner);
+        this.shoot(owner, this.chooseShotType(owner, dGoal, space));
         return;
       }
     }
 
-    // PASS — likely when pressed or building up, but NOT when we just passed up
-    // a good shooting chance (then prefer to shoot/dribble, not recycle it out)
-    const target = this.bestPassTarget(owner);
-    if (target) {
-      let passProb = 0.3 + 0.4 * (1 - Math.min(1, space / 6));
+    // PASS — choose the best target AND the right type of pass for it. Less
+    // likely if we just passed up a good shooting chance (prefer to shoot/run).
+    const pass = this.choosePass(owner, space);
+    if (pass) {
+      let passProb = 0.32 + 0.4 * (1 - Math.min(1, space / 6));
       if (goodChance) passProb *= 0.4;
       if (this.rng.chance(passProb)) {
-        this.pass(owner, target);
+        this.executePass(owner, pass.target, pass.type);
         return;
       }
     }
     // otherwise: keep dribbling (movement already aims at goal)
   }
 
-  private bestPassTarget(owner: Player): Player | null {
+  /**
+   * Choose the best teammate to pass to AND the type of pass that fits the
+   * situation. Vision lets a player even *see* the harder options (through /
+   * lofted / chip); Passing/Technique decide how well they're executed.
+   */
+  private choosePass(
+    owner: Player,
+    space: number,
+  ): { target: Player; type: PassType } | null {
     const goal = this.oppGoal(owner.team);
-    const D = this.directness(owner.team); // 0 short/safe .. 1 long/direct
-    // direct sides + good vision consider longer passes
-    const maxD = 28 + 34 * D + owner.attrs.vision * 0.4;
-    let best: Player | null = null;
+    const D = this.directness(owner.team);
+    const oa = owner.attrs;
+    const sees = oa.vision / 20; // 0..1 chance of spotting the ambitious option
+    const maxD = 26 + 34 * D + oa.vision * 0.5;
+    let best: { target: Player; type: PassType } | null = null;
     let bestScore = -Infinity;
+
     for (const p of this.players) {
       if (p.team !== owner.team || p === owner || p.role === "GK") continue;
       const d = dist(owner.pos, p.pos);
-      if (d < 4 || d > maxD) continue;
-      const advancement = dist(owner.pos, goal) - dist(p.pos, goal); // +ve = more advanced
-      const opp = this.nearestOutfield((1 - owner.team) as 0 | 1, p.pos);
-      const openness = opp ? Math.min(12, dist(opp.pos, p.pos)) : 12;
-      // bonus for finding a teammate in a shooting position (through balls /
-      // cut-backs) so possession actually turns into chances
+      if (d < 3.5 || d > maxD) continue;
+
+      const advancement = dist(owner.pos, goal) - dist(p.pos, goal); // +ve forward
+      const marker = this.nearestOutfield((1 - owner.team) as 0 | 1, p.pos);
+      const openness = marker ? Math.min(14, dist(marker.pos, p.pos)) : 14;
+      const spaceAhead = this.spaceAhead(p); // room to run onto a ball
+      const lateral = Math.abs(p.pos.y - owner.pos.y);
       const tgtGoal = dist(p.pos, goal);
-      const shootingBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.9 : 0;
-      // direct play prizes progress and tolerates risk/range; possession play
-      // prizes keeping the ball — but always value progress over square balls
+
+      // decide the most appropriate pass type for THIS teammate
+      let type: PassType;
+      if (advancement > 9 && spaceAhead > 11 && this.rng.chance(sees * 0.55)) {
+        type = "through"; // a runner with clear space behind the line (vision)
+      } else if (d > 26 && (lateral > 22 || advancement > 14) && this.rng.chance(0.3 + sees * 0.4)) {
+        type = "lofted"; // switch play or beat a high line over the top
+      } else if (space < 2 && d < 11 && this.rng.chance(oa.flair / 30)) {
+        type = "chip"; // tight space, dink it over the press (risky, flair)
+      } else if (d > 15 && D > 0.35) {
+        type = "driven"; // progress at pace
+      } else {
+        type = "feet"; // safe, to feet (the bread and butter)
+      }
+
+      // score the option: progress + how open + a bonus for finding a shooter,
+      // minus distance risk. Risky/ambitious types are downweighted when the
+      // passer lacks the skill to pull them off.
+      const shooterBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.9 : 0;
+      const skill = oa.passing * 0.5 + oa.technique * 0.3 + oa.vision * 0.2;
+      const typeRisk =
+        type === "through" ? 8 : type === "lofted" ? 9 : type === "chip" ? 11 : type === "driven" ? 3 : 0;
+      const riskPenalty = typeRisk * (1 - skill / 20);
       const score =
         advancement * (0.7 + 0.7 * D) +
         openness * (1.2 - 0.7 * D) +
-        shootingBonus -
-        d * (0.12 - 0.06 * D);
+        shooterBonus -
+        d * (0.12 - 0.06 * D) -
+        riskPenalty;
       if (score > bestScore) {
         bestScore = score;
-        best = p;
+        best = { target: p, type };
       }
     }
     return best;
   }
 
-  private pass(passer: Player, target: Player): void {
-    const d = dist(passer.pos, target.pos);
-    const a = passer.attrs;
-    const passSkill = a.passing * 0.6 + a.technique * 0.4;
-    // accuracy falls with distance, poor weather and fatigue; rises with skill
-    const errSd =
-      ((1 - passSkill / 20) * (2.4 + d * 0.12)) / this.sharp(passer) + this.wx.passError;
-    const aim: Vec = {
-      x: target.pos.x + this.rng.gauss(0, errSd),
-      y: target.pos.y + this.rng.gauss(0, errSd),
+  /** Open space ahead of a player toward the goal they attack (for runs). */
+  private spaceAhead(p: Player): number {
+    const goal = this.oppGoal(p.team);
+    const probe: Vec = {
+      x: p.pos.x + norm(sub(goal, p.pos)).x * 10,
+      y: p.pos.y + norm(sub(goal, p.pos)).y * 10,
     };
-    const dir = norm(sub(aim, passer.pos));
-    const speed = Math.min(24, 13 + d * 0.45);
-    this.passesAtt[passer.team]++;
-    this.ball.owner = null;
-    this.ball.shooter = null;
-    this.ball.receiver = target; // the receiver will run onto it
-    this.ball.isShot = false;
-    this.ball.lastTeam = passer.team;
-    this.ball.cooldown = 0.2;
-    this.ball.vel = { x: dir.x * speed, y: dir.y * speed };
+    const opp = this.nearestOutfield((1 - p.team) as 0 | 1, probe);
+    return opp ? dist(opp.pos, probe) : 14;
   }
 
-  private shoot(shooter: Player): void {
+  private chooseShotType(shooter: Player, dGoal: number, space: number): ShotType {
+    const a = shooter.attrs;
+    const gk = this.players.find((p) => p.role === "GK" && p.team !== shooter.team);
+    const ownGoalX = shooter.team === 0 ? PITCH_LENGTH : 0;
+    const keeperOff = gk ? Math.abs(gk.pos.x - ownGoalX) : 0;
+    // keeper rushed off the line + a composed, technical player nearby: chip
+    if (keeperOff > 5 && dGoal > 9 && dGoal < 22 && this.rng.chance((a.composure + a.technique) / 60)) {
+      return "chip";
+    }
+    // distance or hurried: blast it (long shots / power); flair adds variety
+    if (dGoal > 17 || space < 2.2) {
+      if (this.rng.chance(0.55 + a.flair / 50)) return "power";
+    }
+    return "placed";
+  }
+
+  /** Execute a pass of a given type — each behaves and connects differently. */
+  private executePass(passer: Player, target: Player, type: PassType): void {
+    const b = this.ball;
+    const a = passer.attrs;
+    const goalDir = norm(sub(this.oppGoal(target.team), target.pos));
+    const d = dist(passer.pos, target.pos);
+    const passSkill = a.passing * 0.55 + a.technique * 0.3 + a.vision * 0.15;
+
+    // where the ball is aimed, and how it flies, depends on the type
+    let aimPoint: Vec;
+    let lead = 0; // metres ahead of the receiver (into space)
+    let speed: number;
+    let typeErr: number; // base difficulty multiplier
+    let air = 0; // airborne time (lofted/chip beat the ground press)
+    switch (type) {
+      case "feet": // safe, to the receiver's feet
+        lead = 0; speed = 12 + d * 0.3; typeErr = 0.8; break;
+      case "driven": // fast and low, into feet, to progress at pace
+        lead = 1; speed = 17 + d * 0.45; typeErr = 1.0; break;
+      case "through": // lead into space behind the line for a runner
+        lead = 7 + Math.min(8, this.spaceAhead(target) * 0.4); speed = 15 + d * 0.4; typeErr = 1.4; break;
+      case "lofted": // over the top / switch — flies over ground defenders
+        lead = 6; speed = 15 + d * 0.35; typeErr = 1.5; air = Math.min(1.4, d / 22); break;
+      case "chip": // dink over a nearby defender, short
+        lead = 4; speed = 12 + d * 0.3; typeErr = 1.7; air = 0.5; break;
+    }
+    aimPoint = {
+      x: target.pos.x + goalDir.x * lead,
+      y: target.pos.y + goalDir.y * lead,
+    };
+    const errSd =
+      ((1 - passSkill / 20) * (2.0 + d * 0.1) * typeErr) / this.sharp(passer) +
+      this.wx.passError;
+    const aim: Vec = {
+      x: aimPoint.x + this.rng.gauss(0, errSd),
+      y: aimPoint.y + this.rng.gauss(0, errSd),
+    };
+    const dir = norm(sub(aim, passer.pos));
+
+    this.passesAtt[passer.team]++;
+    this.passTypeCounts[type]++;
+    b.owner = null;
+    b.shooter = null;
+    b.receiver = target; // the receiver moves to meet/run onto it
+    b.isShot = false;
+    b.passType = type;
+    b.airTimer = air;
+    b.lastTeam = passer.team;
+    b.cooldown = 0.2;
+    b.vel = { x: dir.x * speed, y: dir.y * speed };
+  }
+
+  private shoot(shooter: Player, type: ShotType): void {
     const goal = this.oppGoal(shooter.team);
     const dGoal = dist(shooter.pos, goal);
-    const challenger = this.nearestOutfield(
-      (1 - shooter.team) as 0 | 1,
-      shooter.pos,
-    );
-    const pressure =
-      challenger && dist(challenger.pos, shooter.pos) < 3 ? 2.5 : 0;
+    const challenger = this.nearestOutfield((1 - shooter.team) as 0 | 1, shooter.pos);
+    const pressure = challenger && dist(challenger.pos, shooter.pos) < 3 ? 2.5 : 0;
     const a = shooter.attrs;
-    const shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.4 + a.longShots * 0.6;
-    // composure tightens the spread; pressure, distance, weather and fatigue widen it
-    let spread = (1 - shootAttr / 20) * 6 + 4.5 + dGoal * 0.12 + pressure + this.wx.shotScatter;
+
+    // which attribute and how the ball flies depends on the shot type
+    let shootAttr: number;
+    let speed: number;
+    let spreadMul: number;
+    switch (type) {
+      case "power": // blasted — fast, harder to save, but wilder
+        shootAttr = a.longShots * 0.6 + a.finishing * 0.4;
+        speed = 27 + a.longShots * 0.3; spreadMul = 1.25; break;
+      case "chip": // lifted over the keeper — placed, not powered
+        shootAttr = a.technique * 0.5 + a.composure * 0.3 + a.finishing * 0.2;
+        speed = 17 + a.technique * 0.2; spreadMul = 1.0; break;
+      case "placed": // finesse/side-foot — accurate
+      default:
+        shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
+        speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
+    }
+    let spread = ((1 - shootAttr / 20) * 6 + 4.5 + dGoal * 0.12 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);
-    const aim: Vec = { x: goal.x, y: aimY };
-    const dir = norm(sub(aim, shooter.pos));
-    const speed = 20 + shootAttr * 0.35;
+    const dir = norm(sub({ x: goal.x, y: aimY }, shooter.pos));
+
     this.ball.owner = null;
     this.ball.shooter = shooter;
     this.ball.receiver = null;
     this.ball.isShot = true;
+    this.ball.shotType = type;
+    this.ball.airTimer = 0;
     this.ball.aimY = aimY;
     this.ball.judged = false;
     this.ball.lastTeam = shooter.team;
-    this.ball.cooldown = 0; // adjudicate the shot immediately, every step
+    this.ball.cooldown = 0;
     this.ball.vel = { x: dir.x * speed, y: dir.y * speed };
     this.shots[shooter.team]++;
+    this.shotTypeCounts[type]++;
   }
 
   private turnover(winner: Player, kind: "tackle" | "interception"): void {
@@ -634,6 +754,9 @@ export class Match {
     this.ball.shooter = null;
     this.ball.receiver = null;
     this.ball.isShot = false;
+    this.ball.airTimer = 0;
+    this.ball.passType = null;
+    this.ball.shotType = null;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
     if (inFinalThird) {
@@ -694,6 +817,9 @@ export class Match {
     b.shooter = null;
     b.receiver = null;
     b.isShot = false;
+    b.shotType = null;
+    b.passType = null;
+    b.airTimer = 0;
     b.judged = false;
     b.lastTeam = p.team;
   }
@@ -701,6 +827,9 @@ export class Match {
   private resolveLooseBall(): void {
     const b = this.ball;
     if (b.cooldown > 0) return;
+    // a lofted/chipped pass is in the air: it flies over the ground press and
+    // can't be cut out until it comes down
+    if (b.airTimer > 0) return;
     const segStart: Vec = { x: b.pos.x - b.vel.x * DT, y: b.pos.y - b.vel.y * DT };
 
     // (1) A shot nearing the goal: the defending keeper gets FIRST chance to
@@ -721,10 +850,15 @@ export class Match {
           const corner = Math.min(1, Math.abs(b.pos.y - 34) / 3.66);
           const ga = gk.attrs;
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
-          const saveProb = Math.max(
+          let saveProb = Math.max(
             0.2,
             Math.min(0.94, (0.45 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
+          // a chip beats a keeper caught off his line; if he's home it's easy
+          if (b.shotType === "chip") {
+            const keeperOff = Math.abs(gk.pos.x - (gk.team === 0 ? 0 : PITCH_LENGTH));
+            saveProb = keeperOff > 4 ? saveProb * 0.4 : Math.min(0.95, saveProb * 1.15);
+          }
           if (this.rng.chance(saveProb)) {
             this.shotsOnTarget[shooter.team]++; // on target and saved
             this.claim(gk);

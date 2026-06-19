@@ -128,9 +128,14 @@ web-football-manager/
 - [x] **Increment 2** — full attribute model, team tactical styles, and match
       conditions (fatigue, weather, home advantage), all tuned to realistic
       match stats
-- [ ] **Increment 3** — individual player roles & instructions (advanced
-      playmaker, target man, ball-winner…), plus substitutions and in-match
-      injuries
+- [x] **Increment 2.5** — typed actions & on-pitch intelligence: per-player
+      "slice" decisions; **pass types** (to-feet / driven / through / lofted /
+      chip) and **shot types** (placed / power / chip) chosen from each player's
+      Vision / Decisions / Technique / Composure / Flair + the team's tactics.
+      Realistic pass mix (~79% to-feet/driven). See `docs/MATCH-ENGINE-REVIEW.md`.
+- [ ] **Increment 3** — dribbling/1v1 take-ons, first-touch-under-pressure,
+      off-ball intelligence, crossing & headers, player traits (see review doc
+      phases C–G)
 - [ ] **Increment 4** — league/season model: fixtures, table, AI-managed clubs
 - [ ] **Increment 5** — management screens (squad, transfers) over a real dataset
 - [ ] **Increment 6** — Node + WebSocket backend, Postgres save, **async
