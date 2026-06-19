@@ -36,8 +36,8 @@ const CENTER: Vec = { x: PITCH_LENGTH / 2, y: PITCH_WIDTH / 2 };
 
 /** Pass types — chosen to fit the situation and the player's skills. */
 export type PassType = "feet" | "driven" | "through" | "lofted" | "chip";
-/** Shot types — placed/finesse, power, or a chip over the keeper. */
-export type ShotType = "placed" | "power" | "chip";
+/** Shot types — placed/finesse, power, chip over the keeper, or a header. */
+export type ShotType = "placed" | "power" | "chip" | "header";
 
 interface Player {
   id: number;
@@ -66,6 +66,7 @@ interface Ball {
   isShot: boolean;
   shotType: ShotType | null; // type of the in-flight shot
   passType: PassType | null; // type of the in-flight pass
+  fromCross: boolean; // ball delivered as a cross — an attacker in the box finishes first-time
   airTimer: number; // seconds the ball is airborne (lofted/chip pass beats the ground press)
   aimY: number; // projected crossing point of the current shot (for on-target)
   judged: boolean; // whether the current shot has already been adjudicated
@@ -143,7 +144,8 @@ export class Match {
   private startedSecondHalf = false;
   /** Diagnostic counters (pass/shot type mix) — used by the headless harness. */
   passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
-  shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0 };
+  shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
+  crossCount = 0;
   private tactics: [TeamTactics, TeamTactics];
   private weather: Weather;
   private wx: WeatherMods;
@@ -181,6 +183,7 @@ export class Match {
       isShot: false,
       shotType: null,
       passType: null,
+      fromCross: false,
       airTimer: 0,
       aimY: 34,
       judged: false,
@@ -272,6 +275,7 @@ export class Match {
     this.ball.airTimer = 0;
     this.ball.passType = null;
     this.ball.shotType = null;
+    this.ball.fromCross = false;
     this.ball.cooldown = 0;
     this.ball.lastTeam = kickingTeam;
     // give the ball to a central player of the kicking team
@@ -533,7 +537,7 @@ export class Match {
           : owner.attrs.finishing * 0.4 + owner.attrs.longShots * 0.6;
       const closeness = Math.max(0, 1 - dGoal / 22);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.033;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.024;
       if (space < 2.5) shotProb *= 0.5; // crowded out
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
@@ -542,6 +546,24 @@ export class Match {
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
         return;
+      }
+    }
+
+    // CROSS / CUT-BACK — from wide advanced areas or the byline, deliver into
+    // the box rather than running the ball out. This is the end product that
+    // turns wide possession into chances (headers / first-time finishes).
+    const finalThirdX = owner.team === 0 ? owner.pos.x > 88 : owner.pos.x < 17;
+    const atByline = owner.team === 0 ? owner.pos.x > 99 : owner.pos.x < 6;
+    const wide = Math.abs(owner.pos.y - 34) > 15;
+    if (finalThirdX && wide) {
+      const boxTarget = this.bestBoxTarget(owner);
+      if (boxTarget) {
+        let crossProb = 0.03 + (owner.attrs.crossing / 20) * 0.05 + t.width * 0.03;
+        if (atByline) crossProb = Math.max(crossProb, 0.1);
+        if (this.rng.chance(crossProb)) {
+          this.cross(owner, boxTarget);
+          return;
+        }
       }
     }
 
@@ -624,6 +646,63 @@ export class Match {
     return best;
   }
 
+  /** Is a player inside the penalty area they are attacking? */
+  private inBoxAttacking(p: Player): boolean {
+    const inWidth = Math.abs(p.pos.y - 34) < 20.16;
+    return (p.team === 0 ? p.pos.x > 88.5 : p.pos.x < 16.5) && inWidth;
+  }
+
+  /** Best teammate to aim a cross at — central, in or arriving in the box. */
+  private bestBoxTarget(crosser: Player): Player | null {
+    const goal = this.oppGoal(crosser.team);
+    let best: Player | null = null;
+    let bestScore = -Infinity;
+    for (const p of this.players) {
+      if (p.team !== crosser.team || p === crosser || p.role === "GK") continue;
+      const advanced = crosser.team === 0 ? p.pos.x > 84 : p.pos.x < 21;
+      const centralEnough = Math.abs(p.pos.y - 34) < 16;
+      if (!advanced || !centralEnough) continue; // need a real target in the box
+      const central = 1 - Math.min(1, Math.abs(p.pos.y - 34) / 18);
+      const marker = this.nearestOutfield((1 - crosser.team) as 0 | 1, p.pos);
+      const openness = marker ? Math.min(10, dist(marker.pos, p.pos)) : 10;
+      const aerial = (p.attrs.heading + p.attrs.jumpingReach) / 2;
+      const score = central * 14 + openness + aerial * 0.4 - dist(p.pos, goal) * 0.2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Deliver a cross to a teammate in the box (lofted, beats the ground press). */
+  private cross(crosser: Player, target: Player): void {
+    const b = this.ball;
+    const d = dist(crosser.pos, target.pos);
+    // accuracy from Crossing (with Technique); poor crossers spray it
+    const crossSkill = crosser.attrs.crossing * 0.7 + crosser.attrs.technique * 0.3;
+    // crosses are imprecise: a packed box means most are contested/cleared, so
+    // we DON'T auto-deliver to the target — it lands in the area to be fought for
+    const errSd = ((1 - crossSkill / 20) * (4 + d * 0.16)) / this.sharp(crosser) + 1.5 + this.wx.passError;
+    const aim: Vec = {
+      x: target.pos.x + this.rng.gauss(0, errSd),
+      y: target.pos.y + this.rng.gauss(0, errSd),
+    };
+    const dir = norm(sub(aim, crosser.pos));
+    const speed = 15 + d * 0.35;
+    this.crossCount++;
+    b.owner = null;
+    b.shooter = null;
+    b.receiver = null; // contested in the box, not gifted to the target
+    b.isShot = false;
+    b.passType = "lofted";
+    b.fromCross = true;
+    b.airTimer = Math.min(1.3, d / 22);
+    b.lastTeam = crosser.team;
+    b.cooldown = 0.2;
+    b.vel = { x: dir.x * speed, y: dir.y * speed };
+  }
+
   /** Open space ahead of a player toward the goal they attack (for runs). */
   private spaceAhead(p: Player): number {
     const goal = this.oppGoal(p.team);
@@ -697,6 +776,7 @@ export class Match {
     b.receiver = target; // the receiver moves to meet/run onto it
     b.isShot = false;
     b.passType = type;
+    b.fromCross = false;
     b.airTimer = air;
     b.lastTeam = passer.team;
     b.cooldown = 0.2;
@@ -721,6 +801,9 @@ export class Match {
       case "chip": // lifted over the keeper — placed, not powered
         shootAttr = a.technique * 0.5 + a.composure * 0.3 + a.finishing * 0.2;
         speed = 17 + a.technique * 0.2; spreadMul = 1.0; break;
+      case "header": // first-time header from a cross — heading & power
+        shootAttr = a.heading * 0.55 + a.finishing * 0.25 + a.jumpingReach * 0.2;
+        speed = 16 + a.heading * 0.25; spreadMul = 1.25; break;
       case "placed": // finesse/side-foot — accurate
       default:
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
@@ -737,6 +820,7 @@ export class Match {
     this.ball.receiver = null;
     this.ball.isShot = true;
     this.ball.shotType = type;
+    this.ball.fromCross = false;
     this.ball.airTimer = 0;
     this.ball.aimY = aimY;
     this.ball.judged = false;
@@ -757,6 +841,7 @@ export class Match {
     this.ball.airTimer = 0;
     this.ball.passType = null;
     this.ball.shotType = null;
+    this.ball.fromCross = false;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
     if (inFinalThird) {
@@ -819,6 +904,7 @@ export class Match {
     b.isShot = false;
     b.shotType = null;
     b.passType = null;
+    b.fromCross = false;
     b.airTimer = 0;
     b.judged = false;
     b.lastTeam = p.team;
@@ -883,6 +969,33 @@ export class Match {
     if (!claimant) return;
 
     const fromOpponent = b.lastTeam !== null && b.lastTeam !== claimant.team;
+
+    // (1b) A cross has come down: contest it. An attacker who wins the aerial
+    // duel heads at goal; otherwise a defender heads it clear. Most crosses are
+    // cleared — exactly as in real football.
+    if (b.fromCross) {
+      b.fromCross = false;
+      if (!fromOpponent && claimant.role !== "GK" && this.inBoxAttacking(claimant)) {
+        const def = this.nearestOutfield((1 - claimant.team) as 0 | 1, claimant.pos);
+        const ca = claimant.attrs;
+        const att = ca.heading * 0.55 + ca.jumpingReach * 0.3 + ca.bravery * 0.15;
+        let winProb = 0.8;
+        if (def && dist(def.pos, claimant.pos) < 4) {
+          const da = def.attrs;
+          const dAer = da.heading * 0.45 + da.jumpingReach * 0.3 + da.marking * 0.25;
+          winProb = att / (att + dAer);
+        }
+        if (this.rng.chance(winProb)) {
+          this.shoot(claimant, "header"); // won the header — first-time at goal
+          return;
+        }
+        if (def) {
+          this.claim(def); // defender heads it clear
+          return;
+        }
+      }
+      // otherwise dealt with by the keeper/defender below (a clearance)
+    }
 
     // (2) An outfield defender may block a shot with their body
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
