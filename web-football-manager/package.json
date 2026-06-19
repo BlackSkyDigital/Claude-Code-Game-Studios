@@ -8,6 +8,7 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "serve": "python3 -m http.server 8080",
-    "simtest": "tsc && node dist/engine/simtest.js"
+    "simtest": "tsc && node dist/engine/simtest.js",
+    "standalone": "tsc && node build-standalone.mjs"
   }
 }
