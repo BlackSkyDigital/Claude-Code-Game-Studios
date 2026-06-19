@@ -105,55 +105,44 @@ const MODE_LABEL: Record<string, string> = {
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const near = (a: number, b: number): boolean => Math.abs(a - b) < 5; // <5m = real move, else a teleport
 
-// ---- highlight modes (FM-style): the sim runs the whole match, the VIEW
-// fast-forwards the dull bits and plays the chosen highlights at watch speed.
+// ---- highlight modes (FM-style) ----
+// The sim runs the whole match. The view fast-forwards until a notable EVENT
+// occurs, then plays the passage of play LEADING TO it (build-up -> event) as
+// a clip. The mode sets how many events qualify (the importance threshold) —
+// NOT how much build-up is shown (every shown highlight includes its build-up).
 let highlightMode = "comprehensive";
-let hiHold = 0; // seconds of "keep showing this passage" remaining
-let skipSpeed = 48; // sim-seconds per real-second while skipping (separate control)
+let skipSpeed = 48; // sim-seconds per real-second while skipping between highlights
 
-// ---- replays: a rolling buffer of recent snapshots we can re-play ----
+// importance level of each event (1 = biggest). A mode shows every event whose
+// level is <= its threshold.
+const EVENT_LEVEL: Record<string, number> = {
+  goal: 1,
+  save: 2, // an on-target chance the keeper had to stop
+  block: 2,
+  shot: 3,
+  shot_off: 3,
+  cross: 4,
+  key_pass: 4,
+  interception: 4,
+  tackle: 4,
+};
+const MODE_THRESHOLD: Record<string, number> = {
+  goals: 1,
+  key: 2,
+  extended: 3,
+  comprehensive: 4,
+};
+
+// ---- replay / highlight clips: a rolling buffer of recent snapshots ----
 const buffer: Snapshot[] = [];
-const BUFFER_MAX = 90; // ~9s at 0.1s
+const BUFFER_MAX = 140; // ~14s at 0.1s — enough to show the build-up to a chance
 let replaysOn = true;
 let replayClip: Snapshot[] | null = null;
 let replayPos = 0; // float index into the clip
-let pendingReplay = false; // a goal just asked for an auto-replay
+let pendingReplay = false; // a goal asked for an extra replay (Full mode)
+let clipTrigger = false; // a qualifying event happened this step
+let clipCooldown = 0; // sim-steps after a clip before another can trigger
 let lastRatingsUpdate = 0;
-
-// how long a highlight lingers after a given event, by mode
-function holdFor(type: string): number {
-  const m = highlightMode;
-  if (m === "commentary" || m === "full") return 0;
-  if (type === "goal") return 4.5;
-  if (m === "goals") return 0;
-  if (type === "shot") return 3;
-  if (type === "save" || type === "block" || type === "shot_off") return 2.5;
-  if (type === "cross") return m === "comprehensive" || m === "extended" ? 2.5 : 0;
-  if (type === "key_pass") return m === "comprehensive" ? 2.5 : 0;
-  return 0;
-}
-// keep showing while the ball is in a "watch" zone for the mode
-function ballHold(snap: Snapshot): number {
-  const m = highlightMode;
-  const x = snap.ball.x;
-  // Comprehensive shows the build-up through midfield and all attacks — it
-  // only skips deep defensive recycling (defenders/keeper knocking it about
-  // near their own goal with no progression).
-  if (m === "comprehensive") {
-    const r = snap.ownerRole;
-    const deepRecycle =
-      (x < 26 || x > 79) && (r === "GK" || r === "DC" || r === "DL" || r === "DR");
-    return deepRecycle ? 0 : 1.4;
-  }
-  // Extended: from the attacking third onward (build-up into the final third).
-  if (m === "extended" && (x > 68 || x < 37)) return 1.2;
-  // Key: around the box.
-  if (m === "key" && (x > 87 || x < 18)) return 1.0;
-  return 0;
-}
-const isFastForward = (): boolean =>
-  highlightMode === "commentary" ||
-  (highlightMode !== "full" && hiHold <= 0);
 
 function fillSelect(sel: HTMLSelectElement, opts: [string, string][]): void {
   sel.innerHTML = "";
@@ -198,10 +187,11 @@ function newMatch(): void {
   trail.length = 0;
   flash = null;
   acc = 0;
-  hiHold = 0;
   buffer.length = 0;
   replayClip = null;
   pendingReplay = false;
+  clipTrigger = false;
+  clipCooldown = 0;
   playing = true;
   playBtn.textContent = "Pause";
   nameHome.textContent = h.short;
@@ -522,8 +512,12 @@ function processEvents(snap: Snapshot): void {
     }
     const f = FLASH[e.type];
     if (f) flash = { text: f.text, color: f.color, until: performance.now() + 1300 };
-    hiHold = Math.max(hiHold, holdFor(e.type)); // a notable event starts/extends a highlight
-    if (e.type === "goal" && replaysOn) pendingReplay = true; // auto-replay goals
+    // does this event qualify as a highlight for the current mode?
+    const lvl = EVENT_LEVEL[e.type];
+    const thr = MODE_THRESHOLD[highlightMode];
+    if (lvl !== undefined && thr !== undefined && lvl <= thr) clipTrigger = true;
+    // Full mode plays live; optionally auto-replay goals there
+    if (e.type === "goal" && replaysOn && highlightMode === "full") pendingReplay = true;
   }
   lastEventCount = snap.events.length;
 }
@@ -542,31 +536,67 @@ function renderCommentaryOnly(): void {
   ctx.fillText("Following the match via the commentary below", canvas.width / 2, canvas.height / 2 + 14);
 }
 
-function drawFFIndicator(): void {
-  ctx.globalAlpha = 0.85;
+function renderSkip(): void {
+  ctx.fillStyle = "#0c1118";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (currSnap) updateHUD(currSnap);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.fillStyle = "#ffce5a";
-  ctx.font = "bold 12px system-ui, sans-serif";
-  ctx.textAlign = "right";
-  ctx.textBaseline = "top";
-  ctx.fillText("⏩ skipping to next highlight", canvas.width - M - 6, M + 6);
-  ctx.globalAlpha = 1;
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText("⏩ skipping to next highlight…", canvas.width / 2, canvas.height / 2 - 8);
+  if (currSnap) {
+    ctx.fillStyle = "#6b7480";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText(`${currSnap.minute}'`, canvas.width / 2, canvas.height / 2 + 18);
+  }
+}
+
+/** Advance the live sim by one frame's worth of real time at the given pace. */
+function stepSim(simSeconds: number, onEvent?: () => boolean): void {
+  acc += simSeconds;
+  let steps = Math.floor(acc / STEP);
+  acc -= steps * STEP;
+  steps = Math.min(steps, 500);
+  for (let i = 0; i < steps && match && !match.finished; i++) {
+    match.step();
+    prevSnap = currSnap;
+    currSnap = match.snapshot();
+    buffer.push(currSnap);
+    if (buffer.length > BUFFER_MAX) buffer.shift();
+    processEvents(currSnap);
+    if (clipCooldown > 0) clipCooldown--;
+    if (onEvent && onEvent()) {
+      acc = 0;
+      break;
+    }
+  }
+  if (match && match.finished) {
+    playing = false;
+    playBtn.textContent = "Play";
+  }
 }
 
 // ---- loop ----
-// The sim always runs the full match; the VIEW fast-forwards between highlights
-// and plays the selected ones (by mode) at the user's watch speed, FM-style.
+// FM-style: the sim runs the whole match. The view fast-forwards until a
+// qualifying EVENT (by mode threshold), then plays the buffered passage of play
+// LEADING TO it (build-up -> event) as a clip. Full = live; Commentary = text.
 function tick(now: number): void {
   requestAnimationFrame(tick);
-  const dtReal = lastFrame ? (now - lastFrame) / 1000 : 0;
+  const dtReal = lastFrame ? Math.min((now - lastFrame) / 1000, 0.1) : 0;
   lastFrame = now;
 
-  // A replay takes over the view and pauses the live sim while it plays.
+  // 1) A clip (highlight or replay) is playing — it owns the view and pauses
+  //    the live sim. Shots/crosses/goals within it slow down so they're seen.
   if (replayClip) {
-    replayPos += (Math.min(dtReal, 0.1) * timeScale) / STEP;
-    const last = replayClip.length - 1;
-    if (replayPos >= last) {
+    const i0 = Math.min(Math.floor(replayPos), replayClip.length - 1);
+    const cm = replayClip[i0]!.ballMode;
+    const clipPace = cm === "shot" || cm === "cross" || cm === "goal" ? timeScale * 0.4 : timeScale;
+    replayPos += (dtReal * clipPace) / STEP;
+    if (replayPos >= replayClip.length - 1) {
       replayClip = null;
       trail.length = 0;
+      clipCooldown = 20; // ~2s before another highlight can trigger
     } else {
       const i = Math.floor(replayPos);
       drawScene(replayClip[i]!, replayClip[Math.max(0, i - 1)]!, replayPos - i, true);
@@ -575,56 +605,37 @@ function tick(now: number): void {
     }
   }
 
-  if (match && playing && !match.finished) {
-    const ff = isFastForward();
-    // brief slow-mo on shots/crosses so the strike is actually visible
-    const action = currSnap?.ballMode;
-    const watch = action === "shot" || action === "cross" ? timeScale * 0.4 : timeScale;
-    acc += Math.min(dtReal, 0.1) * (ff ? skipSpeed : watch);
-    let safety = 0;
-    while (acc >= STEP && !match.finished && safety < 1200) {
-      match.step();
-      prevSnap = currSnap;
-      currSnap = match.snapshot();
-      buffer.push(currSnap);
-      if (buffer.length > BUFFER_MAX) buffer.shift();
-      processEvents(currSnap); // may bump hiHold / set pendingReplay
-      hiHold = Math.max(hiHold - STEP, ballHold(currSnap));
-      acc -= STEP;
-      safety++;
-      if (pendingReplay) {
-        pendingReplay = false;
-        startReplay();
-        acc = 0;
-        break;
-      }
-      // if we were skipping and a highlight just began, stop here and play it
-      if (ff && highlightMode !== "commentary" && hiHold > 0) {
-        acc = 0;
-        break;
-      }
-    }
-    if (match.finished) {
-      playing = false;
-      playBtn.textContent = "Play";
-    }
-  }
-
-  if (replayClip) {
-    // a goal just triggered an auto-replay this frame
-    drawScene(replayClip[0]!, replayClip[0]!, 0, true);
-    if (currSnap) updateHUD(currSnap);
+  if (!match || !playing || match.finished) {
+    if (highlightMode === "commentary") renderCommentaryOnly();
+    else render();
     return;
   }
 
-  const ffNow = isFastForward();
-  alpha = playing && !ffNow ? Math.min(1, acc / STEP) : 1;
-  if (highlightMode === "commentary") {
-    renderCommentaryOnly();
-  } else {
+  if (highlightMode === "full") {
+    const cm = currSnap?.ballMode;
+    const watch = cm === "shot" || cm === "cross" ? timeScale * 0.4 : timeScale;
+    stepSim(dtReal * watch, () => {
+      if (pendingReplay) { pendingReplay = false; startReplay(); return true; }
+      return false;
+    });
+    if (replayClip) { drawScene(replayClip[0]!, replayClip[0]!, 0, true); if (currSnap) updateHUD(currSnap); return; }
+    alpha = playing ? Math.min(1, acc / STEP) : 1;
     render();
-    if (playing && ffNow && !match?.finished) drawFFIndicator();
+    return;
   }
+
+  if (highlightMode === "commentary") {
+    stepSim(dtReal * skipSpeed);
+    renderCommentaryOnly();
+    return;
+  }
+
+  // clip modes: fast-forward, watching for a qualifying event
+  clipTrigger = false;
+  stepSim(dtReal * skipSpeed, () => clipTrigger && clipCooldown <= 0);
+  if (clipTrigger && clipCooldown <= 0) startReplay(); // play the build-up clip
+  if (replayClip) { drawScene(replayClip[0]!, replayClip[0]!, 0, true); if (currSnap) updateHUD(currSnap); return; }
+  renderSkip(); // between highlights
 }
 
 // ---- wiring ----
@@ -647,7 +658,8 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) 
 }
 hlSel.addEventListener("change", () => {
   highlightMode = hlSel.value;
-  hiHold = 0;
+  clipCooldown = 0;
+  clipTrigger = false;
 });
 skipSel.addEventListener("change", () => {
   skipSpeed = Number(skipSel.value);
