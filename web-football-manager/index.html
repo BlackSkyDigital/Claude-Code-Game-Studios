@@ -14,8 +14,8 @@
         --accent: #2f8f3f;
       }
       * { box-sizing: border-box; }
+      html, body { margin: 0; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
       body {
-        margin: 0;
         background: var(--bg);
         color: var(--text);
         font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -33,7 +33,11 @@
         padding: 16px 20px;
         align-items: start;
       }
-      @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+      @media (max-width: 900px) {
+        .wrap { grid-template-columns: 1fr; }
+        /* on mobile, don't trap page scroll inside inner panels — let it all flow */
+        .ratings, #feed { max-height: none !important; overflow: visible !important; }
+      }
 
       .scoreboard {
         display: flex;
@@ -123,7 +127,7 @@
   <body>
     <header>
       <h1>⚽ Web Football Manager — 2D Match Engine</h1>
-      <p>Deterministic, seeded match simulation rendered top-down. Increment 1 of the private 3-player project.</p>
+      <p>Deterministic match sim with tactics, attributes &amp; conditions — broadcast view with highlights, replays, commentary, xG &amp; ratings.</p>
     </header>
 
     <div class="wrap">

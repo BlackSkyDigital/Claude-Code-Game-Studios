@@ -168,6 +168,8 @@ export class Match {
   private ball: Ball;
   private startedSecondHalf = false;
   private buildupTimer = 0;
+  private celebrateTimer = 0; // brief hold after a goal so it's seen before kick-off
+  private pendingKickoff: 0 | 1 = 0;
   /** Diagnostic counters (pass/shot type mix) — used by the headless harness. */
   passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
   shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
@@ -324,6 +326,12 @@ export class Match {
 
   step(): void {
     if (this.finished) return;
+    // hold on the goal (ball in the net) before restarting, so it's visible
+    if (this.celebrateTimer > 0) {
+      this.celebrateTimer -= DT;
+      if (this.celebrateTimer <= 0) this.kickoff(this.pendingKickoff, false);
+      return;
+    }
     this.time += DT;
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
     if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
@@ -435,8 +443,8 @@ export class Match {
       const ty =
         CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + drift;
       p.target = clampPitch({
-        // outfielders never retreat onto their own goal line
-        x: dir > 0 ? clamp(tx, 6, PITCH_LENGTH) : clamp(tx, 0, PITCH_LENGTH - 6),
+        // outfielders stay off both goal lines — never on/behind them (no pile-up)
+        x: clamp(tx, 5, PITCH_LENGTH - 5),
         y: ty,
       });
     }
@@ -1194,7 +1202,13 @@ export class Match {
       if (assister && assister.team === team && assister !== shooter) assister.stat.assists++;
     }
     this.emit("goal", team, scorer, this.vary([`GOAL! ${scorer} scores for ${this.shortName(team)}!`, `${scorer} finds the net — GOAL for ${this.shortName(team)}!`, `It's there! ${scorer} scores!`, `GOAL!! ${scorer} makes it count for ${this.shortName(team)}!`]));
-    this.kickoff((1 - team) as 0 | 1, false);
+    // leave the ball in the net and hold briefly so the goal is seen / captured
+    // for replay, then kick off
+    this.ball.owner = null;
+    this.ball.vel = { x: 0, y: 0 };
+    this.ball.isShot = false;
+    this.celebrateTimer = 2.0;
+    this.pendingKickoff = (1 - team) as 0 | 1;
   }
 
   private shortName(team: 0 | 1): string {
@@ -1277,13 +1291,15 @@ export class Match {
       awayStyle: this.tactics[1].style,
       weather: this.weather,
       ball: { ...this.ball.pos },
-      ballMode: this.ball.owner
-        ? "dribble"
-        : this.ball.isShot
-          ? "shot"
-          : this.ball.fromCross
-            ? "cross"
-            : (this.ball.passType ?? "loose"),
+      ballMode: this.celebrateTimer > 0
+        ? "goal"
+        : this.ball.owner
+          ? "dribble"
+          : this.ball.isShot
+            ? "shot"
+            : this.ball.fromCross
+              ? "cross"
+              : (this.ball.passType ?? "loose"),
       players: this.players.map((p) => ({
         x: p.pos.x,
         y: p.pos.y,

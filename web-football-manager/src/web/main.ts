@@ -86,6 +86,7 @@ const MODE_COLOR: Record<string, string> = {
   chip: "#ffc266",
   cross: "#ff9a3c",
   shot: "#ff5a5a",
+  goal: "#7ef08a",
   loose: "#cfd8e3",
 };
 const MODE_LABEL: Record<string, string> = {
@@ -97,6 +98,7 @@ const MODE_LABEL: Record<string, string> = {
   chip: "Chip",
   cross: "Cross",
   shot: "Shot!",
+  goal: "GOAL!",
   loose: "Loose ball",
 };
 
@@ -565,7 +567,10 @@ function tick(now: number): void {
 
   if (match && playing && !match.finished) {
     const ff = isFastForward();
-    acc += Math.min(dtReal, 0.1) * (ff ? skipSpeed : timeScale);
+    // brief slow-mo on shots/crosses so the strike is actually visible
+    const action = currSnap?.ballMode;
+    const watch = action === "shot" || action === "cross" ? timeScale * 0.4 : timeScale;
+    acc += Math.min(dtReal, 0.1) * (ff ? skipSpeed : watch);
     let safety = 0;
     while (acc >= STEP && !match.finished && safety < 1200) {
       match.step();
