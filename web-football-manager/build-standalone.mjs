@@ -11,8 +11,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 // dependency order — each file may reference names defined in earlier ones
 const order = [
-  "dist/engine/rng.js",
+  "dist/engine/attributes.js",
   "dist/engine/types.js",
+  "dist/engine/tactics.js",
+  "dist/engine/conditions.js",
+  "dist/engine/rng.js",
   "dist/engine/formations.js",
   "dist/engine/data.js",
   "dist/engine/match.js",

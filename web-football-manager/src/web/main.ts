@@ -6,6 +6,13 @@ import {
   PITCH_LENGTH,
   PITCH_WIDTH,
 } from "../engine/types.js";
+import {
+  TACTICAL_STYLES,
+  styleLabel,
+  tacticsForStyle,
+  type TacticalStyle,
+} from "../engine/tactics.js";
+import { WEATHER_TYPES, weatherLabel, type Weather } from "../engine/conditions.js";
 
 // ---- DOM ----
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -29,6 +36,11 @@ const stPoss = [$("stPoss0"), $("stPoss1")] as const;
 const stShots = [$("stShots0"), $("stShots1")] as const;
 const stSot = [$("stSot0"), $("stSot1")] as const;
 const stPass = [$("stPass0"), $("stPass1")] as const;
+const stFit = [$("stFit0"), $("stFit1")] as const;
+const homeStyleSel = $<HTMLSelectElement>("homeStyle");
+const awayStyleSel = $<HTMLSelectElement>("awayStyle");
+const weatherSel = $<HTMLSelectElement>("weatherSel");
+const conditionsLine = $("conditions");
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -46,25 +58,42 @@ let acc = 0; // leftover simulated time not yet stepped
 let lastEventCount = 0;
 const STEP = 0.1; // must match the engine's internal DT
 
-function fillTeamSelects(): void {
-  for (const sel of [homeSel, awaySel]) {
-    sel.innerHTML = "";
-    TEAMS.forEach((t, i) => {
-      const opt = document.createElement("option");
-      opt.value = String(i);
-      opt.textContent = t.name;
-      sel.appendChild(opt);
-    });
+function fillSelect(sel: HTMLSelectElement, opts: [string, string][]): void {
+  sel.innerHTML = "";
+  for (const [value, label] of opts) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    sel.appendChild(opt);
   }
+}
+
+function fillTeamSelects(): void {
+  const teamOpts = TEAMS.map((t, i) => [String(i), t.name] as [string, string]);
+  fillSelect(homeSel, teamOpts);
+  fillSelect(awaySel, teamOpts);
   homeSel.value = "0";
   awaySel.value = "1";
+
+  const styleOpts = TACTICAL_STYLES.map((s) => [s, styleLabel(s)] as [string, string]);
+  fillSelect(homeStyleSel, styleOpts);
+  fillSelect(awayStyleSel, styleOpts);
+  homeStyleSel.value = "balanced";
+  awayStyleSel.value = "balanced";
+
+  fillSelect(weatherSel, WEATHER_TYPES.map((w) => [w, weatherLabel(w)] as [string, string]));
+  weatherSel.value = "clear";
 }
 
 function newMatch(): void {
   const h = TEAMS[Number(homeSel.value)]!;
   const a = TEAMS[Number(awaySel.value)]!;
   const seed = Number(seedInput.value) || 1;
-  match = new Match(h, a, seed);
+  match = new Match(h, a, seed, {
+    homeTactics: tacticsForStyle(homeStyleSel.value as TacticalStyle),
+    awayTactics: tacticsForStyle(awayStyleSel.value as TacticalStyle),
+    weather: weatherSel.value as Weather,
+  });
   lastEventCount = 0;
   feed.innerHTML = "";
   playing = true;
@@ -178,7 +207,11 @@ function draw(snap: Snapshot): void {
     stShots[i].textContent = String(snap.shots[i]);
     stSot[i].textContent = String(snap.shotsOnTarget[i]);
     stPass[i].textContent = `${snap.passAccuracy[i]}%`;
+    stFit[i].textContent = `${snap.fitness[i]}%`;
   }
+  conditionsLine.textContent =
+    `${styleLabel(snap.homeStyle as TacticalStyle)}  ·  ${weatherLabel(snap.weather as Weather)}  ·  ` +
+    `${styleLabel(snap.awayStyle as TacticalStyle)}`;
 
   // commentary (append only new events)
   if (snap.events.length > lastEventCount) {

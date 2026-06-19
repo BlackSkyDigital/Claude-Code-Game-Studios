@@ -1,28 +1,27 @@
-import type { Attrs, PlayerDef, Role, TeamDef } from "./types.js";
+import type { PlayerDef, Role, TeamDef } from "./types.js";
+import { makeAttrs, type Attrs } from "./attributes.js";
 
 /**
- * Seed dataset of real teams/players for the demo.
+ * Seed dataset of real teams/players.
  *
- * Per the project's design note: this is a PRIVATE project for a handful of
- * friends. Real player names are used as factual data; attributes are rough,
- * hand-tuned estimates (1–20, FM-style) for gameplay only — not an official
- * rating of anyone. Do not host publicly or monetise with these names/crests.
+ * Each player is built from a single `overall` rating plus role-based emphasis
+ * (see attributes.ts), with a few explicit overrides for the standout
+ * attributes that define them. This gives every player the full ~38-attribute
+ * profile without hand-entering hundreds of numbers.
  *
- * Later this will be replaced by an editable, imported dataset (see roadmap).
+ * Per the project's design note: PRIVATE project for a few friends. Real names
+ * are factual data; ratings are rough, hand-tuned gameplay estimates only. Do
+ * not host publicly with real crests/kits or monetise.
  */
 
 function p(
   name: string,
   number: number,
   role: Role,
-  pace: number,
-  passing: number,
-  shooting: number,
-  tackling: number,
-  control: number,
+  overall: number,
+  ov: Partial<Attrs> = {},
 ): PlayerDef {
-  const attrs: Attrs = { pace, passing, shooting, tackling, control };
-  return { name, number, role, attrs };
+  return { name, number, role, attrs: makeAttrs(role, overall, ov) };
 }
 
 export const TEAMS: TeamDef[] = [
@@ -33,17 +32,17 @@ export const TEAMS: TeamDef[] = [
     textColor: "#0b1c2c",
     formation: "4-3-3",
     players: [
-      p("Ederson", 31, "GK", 12, 15, 4, 8, 16),
-      p("Walker", 2, "DR", 18, 13, 7, 14, 13),
-      p("Dias", 3, "DC", 12, 14, 6, 17, 15),
-      p("Stones", 5, "DC", 12, 16, 8, 15, 16),
-      p("Gvardiol", 24, "DL", 15, 14, 9, 15, 15),
-      p("Rodri", 16, "DM", 11, 17, 12, 17, 17),
-      p("De Bruyne", 17, "MC", 12, 19, 16, 9, 18),
-      p("Silva", 20, "MC", 13, 18, 13, 11, 18),
-      p("Foden", 47, "MR", 16, 16, 16, 8, 18),
-      p("Haaland", 9, "ST", 17, 11, 19, 6, 15),
-      p("Doku", 11, "ML", 19, 13, 13, 7, 16),
+      p("Ederson", 31, "GK", 16, { kicking: 18, passing: 16 }),
+      p("Walker", 2, "DR", 15, { pace: 19, acceleration: 18 }),
+      p("Dias", 3, "DC", 17, { tackling: 17, marking: 17, composure: 16 }),
+      p("Stones", 5, "DC", 16, { passing: 16, composure: 16 }),
+      p("Gvardiol", 24, "DL", 16, { pace: 16, strength: 16 }),
+      p("Rodri", 16, "DM", 18, { passing: 18, decisions: 18, composure: 18, tackling: 17 }),
+      p("De Bruyne", 17, "MC", 18, { passing: 20, vision: 20, longShots: 18, technique: 18 }),
+      p("Silva", 20, "MC", 17, { technique: 19, vision: 18, dribbling: 17 }),
+      p("Foden", 47, "MR", 17, { dribbling: 18, technique: 18, finishing: 16 }),
+      p("Haaland", 9, "ST", 17, { finishing: 19, strength: 18, pace: 17 }),
+      p("Doku", 11, "ML", 15, { pace: 19, acceleration: 19, dribbling: 18 }),
     ],
   },
   {
@@ -53,17 +52,17 @@ export const TEAMS: TeamDef[] = [
     textColor: "#ffffff",
     formation: "4-3-3",
     players: [
-      p("Alisson", 1, "GK", 12, 15, 4, 8, 16),
-      p("Alexander-Arnold", 66, "DR", 14, 18, 11, 12, 16),
-      p("Konate", 5, "DC", 15, 12, 5, 16, 13),
-      p("Van Dijk", 4, "DC", 13, 15, 8, 18, 16),
-      p("Robertson", 26, "DL", 16, 16, 9, 14, 15),
-      p("Mac Allister", 10, "DM", 12, 17, 13, 14, 16),
-      p("Szoboszlai", 8, "MC", 15, 16, 15, 12, 16),
-      p("Gravenberch", 38, "MC", 14, 15, 11, 13, 16),
-      p("Salah", 11, "MR", 17, 15, 18, 7, 17),
-      p("Nunez", 9, "ST", 18, 11, 15, 7, 13),
-      p("Diaz", 7, "ML", 18, 14, 15, 9, 16),
+      p("Alisson", 1, "GK", 17, { reflexes: 18, oneOnOnes: 17 }),
+      p("Alexander-Arnold", 66, "DR", 16, { passing: 18, crossing: 18, vision: 17 }),
+      p("Konate", 5, "DC", 15, { pace: 16, strength: 16 }),
+      p("Van Dijk", 4, "DC", 18, { tackling: 18, marking: 18, heading: 18, strength: 18, composure: 18 }),
+      p("Robertson", 26, "DL", 16, { stamina: 18, crossing: 17, pace: 16 }),
+      p("Mac Allister", 10, "DM", 16, { passing: 17, vision: 16, technique: 16 }),
+      p("Szoboszlai", 8, "MC", 16, { longShots: 17, stamina: 17 }),
+      p("Gravenberch", 38, "MC", 15, { dribbling: 16, strength: 15 }),
+      p("Salah", 11, "MR", 18, { finishing: 18, pace: 17, dribbling: 18, composure: 17 }),
+      p("Nunez", 9, "ST", 15, { pace: 18, strength: 16, finishing: 14 }),
+      p("Diaz", 7, "ML", 16, { dribbling: 17, pace: 18, acceleration: 18 }),
     ],
   },
   {
@@ -73,17 +72,17 @@ export const TEAMS: TeamDef[] = [
     textColor: "#ffffff",
     formation: "4-3-3",
     players: [
-      p("Raya", 22, "GK", 12, 15, 4, 8, 15),
-      p("White", 4, "DR", 14, 14, 8, 15, 14),
-      p("Saliba", 2, "DC", 15, 14, 6, 17, 15),
-      p("Gabriel", 6, "DC", 13, 12, 9, 16, 13),
-      p("Calafiori", 33, "DL", 15, 14, 9, 14, 14),
-      p("Rice", 41, "DM", 13, 16, 12, 16, 16),
-      p("Odegaard", 8, "MC", 12, 18, 14, 10, 18),
-      p("Havertz", 29, "MC", 14, 14, 14, 11, 15),
-      p("Saka", 7, "MR", 16, 16, 16, 9, 17),
-      p("Jesus", 9, "ST", 15, 14, 14, 9, 16),
-      p("Martinelli", 11, "ML", 18, 13, 14, 8, 15),
+      p("Raya", 22, "GK", 16, { kicking: 16, handling: 16 }),
+      p("White", 4, "DR", 15, { tackling: 16, positioning: 15 }),
+      p("Saliba", 2, "DC", 17, { pace: 17, tackling: 17, composure: 17 }),
+      p("Gabriel", 6, "DC", 16, { heading: 17, strength: 17 }),
+      p("Calafiori", 33, "DL", 15, { dribbling: 15 }),
+      p("Rice", 41, "DM", 17, { tackling: 17, stamina: 18, passing: 16, strength: 16 }),
+      p("Odegaard", 8, "MC", 17, { vision: 18, passing: 18, technique: 18 }),
+      p("Havertz", 29, "MC", 15, { heading: 16, offTheBall: 16 }),
+      p("Saka", 7, "MR", 17, { dribbling: 18, crossing: 17, finishing: 16 }),
+      p("Jesus", 9, "ST", 15, { dribbling: 16, workRate: 17 }),
+      p("Martinelli", 11, "ML", 16, { pace: 18, acceleration: 18 }),
     ],
   },
   {
@@ -93,17 +92,17 @@ export const TEAMS: TeamDef[] = [
     textColor: "#1a1a2c",
     formation: "4-3-3",
     players: [
-      p("Courtois", 1, "GK", 11, 14, 4, 8, 16),
-      p("Carvajal", 2, "DR", 14, 15, 9, 15, 14),
-      p("Rudiger", 22, "DC", 15, 12, 7, 17, 13),
-      p("Militao", 3, "DC", 16, 12, 6, 16, 14),
-      p("Mendy", 23, "DL", 16, 12, 7, 15, 13),
-      p("Tchouameni", 18, "DM", 13, 15, 11, 16, 15),
-      p("Valverde", 15, "MC", 16, 16, 15, 14, 16),
-      p("Bellingham", 5, "MC", 15, 17, 16, 11, 17),
-      p("Vinicius", 7, "MR", 19, 14, 16, 7, 17),
-      p("Mbappe", 9, "ST", 20, 14, 18, 6, 17),
-      p("Rodrygo", 11, "ML", 17, 15, 15, 8, 16),
+      p("Courtois", 1, "GK", 17, { reflexes: 18, aerialReach: 18, command: 17 }),
+      p("Carvajal", 2, "DR", 16, { crossing: 16, workRate: 17 }),
+      p("Rudiger", 22, "DC", 16, { pace: 16, strength: 17, aggression: 17 }),
+      p("Militao", 3, "DC", 16, { pace: 17, jumpingReach: 17 }),
+      p("Mendy", 23, "DL", 15, { pace: 16, strength: 16 }),
+      p("Tchouameni", 18, "DM", 16, { tackling: 17, strength: 16, positioning: 16 }),
+      p("Valverde", 15, "MC", 17, { stamina: 19, workRate: 18, longShots: 17, pace: 16 }),
+      p("Bellingham", 5, "MC", 18, { offTheBall: 18, technique: 17, finishing: 16, composure: 17 }),
+      p("Vinicius", 7, "MR", 18, { pace: 19, acceleration: 19, dribbling: 19, flair: 18 }),
+      p("Mbappe", 9, "ST", 19, { pace: 20, acceleration: 20, finishing: 18, dribbling: 18 }),
+      p("Rodrygo", 11, "ML", 16, { dribbling: 17, pace: 17 }),
     ],
   },
 ];

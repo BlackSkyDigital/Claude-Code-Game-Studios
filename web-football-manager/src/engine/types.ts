@@ -31,14 +31,8 @@ export type Role =
   | "AM"
   | "ST";
 
-/** Player ability ratings, FM-style 1–20. */
-export interface Attrs {
-  pace: number; // top speed / acceleration
-  passing: number; // pass accuracy & range
-  shooting: number; // shot accuracy & power
-  tackling: number; // winning the ball
-  control: number; // first touch / retaining the ball
-}
+import type { Attrs } from "./attributes.js";
+export type { Attrs };
 
 export interface PlayerDef {
   name: string;

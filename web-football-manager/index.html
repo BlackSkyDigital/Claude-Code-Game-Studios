@@ -131,9 +131,25 @@
               <label for="awaySel">Away</label>
               <select id="awaySel"></select>
             </div>
-            <div>
-              <label for="seed">Seed (same seed = same match)</label>
-              <input id="seed" type="number" value="7" />
+            <div class="row">
+              <div>
+                <label for="homeStyle">Home tactics</label>
+                <select id="homeStyle"></select>
+              </div>
+              <div>
+                <label for="awayStyle">Away tactics</label>
+                <select id="awayStyle"></select>
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <label for="weatherSel">Weather</label>
+                <select id="weatherSel"></select>
+              </div>
+              <div>
+                <label for="seed">Seed</label>
+                <input id="seed" type="number" value="7" />
+              </div>
             </div>
             <div class="row">
               <button id="newBtn">New Match</button>
@@ -153,10 +169,12 @@
 
         <div class="panel" style="margin-top: 16px;">
           <h2>Match Stats</h2>
+          <div id="conditions" style="text-align:center;color:var(--muted);font-size:11px;margin-bottom:8px;">—</div>
           <div class="stat"><span id="stPoss0" class="sv">50%</span><span class="sl">Possession</span><span id="stPoss1" class="sv">50%</span></div>
           <div class="stat"><span id="stShots0" class="sv">0</span><span class="sl">Shots</span><span id="stShots1" class="sv">0</span></div>
           <div class="stat"><span id="stSot0" class="sv">0</span><span class="sl">On target</span><span id="stSot1" class="sv">0</span></div>
           <div class="stat"><span id="stPass0" class="sv">0%</span><span class="sl">Pass accuracy</span><span id="stPass1" class="sv">0%</span></div>
+          <div class="stat"><span id="stFit0" class="sv">100%</span><span class="sl">Fitness</span><span id="stFit1" class="sv">100%</span></div>
         </div>
 
         <div class="panel" style="margin-top: 16px;">

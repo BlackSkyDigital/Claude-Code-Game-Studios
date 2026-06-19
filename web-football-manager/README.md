@@ -13,21 +13,44 @@ lifted straight into its own standalone repository at any time.
 
 ---
 
-## Status — Increment 1: the 2D match engine ✅
+## Status — Increment 2: tactics, attributes & conditions ✅
 
-The riskiest, most important piece is built and verified first: a deterministic,
-seeded **match simulation** that produces continuous player/ball positions,
-rendered as a top-down 2D pitch with live commentary.
+A deterministic, seeded **match simulation** rendered as a top-down 2D pitch
+with live commentary and stats. The engine now combines **full player
+attributes**, **team tactical styles**, and **match conditions** (weather,
+fatigue, home advantage) so the same teams play differently depending on how
+they're set up and where/when they play.
 
-Over 200 simulated matches (Man City vs Liverpool) the engine produces
-**realistic football**:
+Verified across many simulated matches, it produces **realistic football**:
 
 | Metric | This engine | Real-world (EPL) |
 |---|---|---|
-| Goals / match | ~3.1 | ~2.8 |
-| Shots / match | ~27 | ~25 |
-| Conversion | ~12% | ~10% |
+| Goals / match | ~2.6 | ~2.8 |
+| Shots / match | ~25 | ~25 |
+| Shots on target | ~32% | ~33% |
+| Goalkeeper save rate | ~68% | ~70% |
+| Pass completion | ~68–80% (by style) | ~75–85% |
 | Common scorelines | 1-0, 1-1, 2-1, 2-2, 0-1, 2-0 | the same |
+
+### Tactics, attributes & conditions
+
+- **Full attribute model** — every player carries the complete FM-style set
+  (Technical / Mental / Physical / Goalkeeping, ~38 attributes). Pace +
+  acceleration drive speed; passing/technique/composure drive passing;
+  finishing/long-shots drive shooting; tackling/strength duels for the ball;
+  reflexes/handling for saves; stamina/natural fitness govern fatigue.
+- **Tactical styles** set the team-instruction knobs (mentality, tempo,
+  directness, pressing, line height, width). Each visibly changes play:
+  *tiki-taka* keeps possession with short passing; *gegenpress* is high,
+  intense and chaotic; *counter* / *catenaccio* sit deep and play fewer, safer
+  passes; *route-one* goes long and direct.
+- **Conditions** layer real modifiers: **fatigue** (players tire over 90 min,
+  faster with high tempo/press and low stamina; visible as falling Fitness),
+  **weather** (rain = heavier ball + lower pass accuracy + more direct play;
+  heat tires players faster), and **home advantage** (sharper at home, slight
+  away travel fatigue).
+- **Randomness** comes from the single seeded RNG, so a result is accurate to
+  life *with* the unpredictability real football has.
 
 ## How to run
 
@@ -101,10 +124,15 @@ web-football-manager/
 
 ## Roadmap
 
-- [x] **Increment 1** — deterministic 2D match engine + aerial renderer (this)
-- [ ] **Increment 2** — tactics input (formation/mentality) feeding the engine
-- [ ] **Increment 3** — league/season model: fixtures, table, AI-managed clubs
-- [ ] **Increment 4** — management screens (squad, transfers) over a real dataset
-- [ ] **Increment 5** — Node + WebSocket backend, Postgres save, **async
+- [x] **Increment 1** — deterministic 2D match engine + aerial renderer
+- [x] **Increment 2** — full attribute model, team tactical styles, and match
+      conditions (fatigue, weather, home advantage), all tuned to realistic
+      match stats
+- [ ] **Increment 3** — individual player roles & instructions (advanced
+      playmaker, target man, ball-winner…), plus substitutions and in-match
+      injuries
+- [ ] **Increment 4** — league/season model: fixtures, table, AI-managed clubs
+- [ ] **Increment 5** — management screens (squad, transfers) over a real dataset
+- [ ] **Increment 6** — Node + WebSocket backend, Postgres save, **async
       3-player online** ("advance the week when all 3 are ready")
-- [ ] **Increment 6** — auth for the 3 friends, deploy (Fly.io / Railway)
+- [ ] **Increment 7** — auth for the 3 friends, deploy (Fly.io / Railway)
