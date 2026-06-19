@@ -10,6 +10,7 @@ import {
   type MatchEventType,
   type Role,
   type TeamDef,
+  type Trait,
   type Vec,
 } from "./types.js";
 import { tacticsForStyle, type TeamTactics } from "./tactics.js";
@@ -55,6 +56,9 @@ interface Player {
   condition: number; // 0..1 current fitness; drops with fatigue
   decisionTimer: number; // per-player cadence between on-ball decisions
   assistFrom: Player | null; // teammate who last fed this player (for assists)
+  traits: Set<Trait>; // preferred player moves that bias decisions
+  dribbleTimer: number; // >0 just after beating a man: a burst of pace & control
+  injured: boolean; // carrying a knock — slower, more error-prone
   stat: PlayerStat;
 }
 
@@ -87,6 +91,7 @@ interface Ball {
   aimY: number; // projected crossing point of the current shot (for on-target)
   judged: boolean; // whether the current shot has already been adjudicated
   cooldown: number; // seconds during which the ball cannot be controlled
+  offsideFlag: 0 | 1 | null; // team flagged offside on the in-flight pass, if any
 }
 
 /** Rendering snapshot — everything the view needs, nothing it doesn't. */
@@ -123,6 +128,8 @@ export interface Snapshot {
     hasBall: boolean;
     rating: number;
     goals: number;
+    fitness: number; // individual condition 0–100
+    injured: boolean;
   }[];
   events: MatchEvent[];
 }
@@ -176,6 +183,12 @@ export class Match {
   passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
   shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
   crossCount = 0;
+  takeOnAtt = 0; // 1v1 take-ons attempted
+  takeOnWon = 0; // take-ons that beat the man
+  cornerCount = 0;
+  penaltyCount = 0;
+  offsideCount = 0;
+  shotDist: number[] = []; // diagnostic: distance-to-goal of each shot
   private tactics: [TeamTactics, TeamTactics];
   private weather: Weather;
   private wx: WeatherMods;
@@ -221,6 +234,7 @@ export class Match {
       aimY: 34,
       judged: false,
       cooldown: 0,
+      offsideFlag: null,
     };
     this.kickoff(0, true);
   }
@@ -255,6 +269,9 @@ export class Match {
           condition: startCond,
           decisionTimer: 0,
           assistFrom: null,
+          traits: new Set(pd.traits ?? []),
+          dribbleTimer: 0,
+          injured: false,
           stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
         });
       });
@@ -271,9 +288,10 @@ export class Match {
     return this.tactics[team];
   }
 
-  /** Current top speed, reduced by fatigue. */
+  /** Current top speed, reduced by fatigue, lifted briefly after beating a man. */
   private effSpeed(p: Player): number {
-    return p.baseSpeed * (0.62 + 0.38 * p.condition);
+    const burst = p.dribbleTimer > 0 ? 1.22 : 1;
+    return p.baseSpeed * (0.62 + 0.38 * p.condition) * burst;
   }
 
   /** Execution sharpness 0..~1.1 — fatigue lowers it, home advantage lifts it. */
@@ -300,6 +318,17 @@ export class Match {
     }
   }
 
+  /** A challenge can leave a player with a knock: he plays on slower and more
+   * error-prone (no substitutions yet — that's the in-match management step). */
+  private maybeInjure(p: Player, prob: number): void {
+    if (p.injured || p.role === "GK") return;
+    if (!this.rng.chance(prob)) return;
+    p.injured = true;
+    p.condition = Math.max(0.4, p.condition - 0.12);
+    p.baseSpeed *= 0.88; // carrying a knock — a yard slower
+    this.emit("injury", p.team, p.name, this.vary([`${p.name} is hurt and needs treatment...`, `${p.name} picks up a knock but plays on.`, `${p.name} is feeling that one.`]));
+  }
+
   private kickoff(kickingTeam: 0 | 1, matchStart: boolean): void {
     for (const p of this.players) p.pos = { ...p.base };
     this.ball.pos = { ...CENTER };
@@ -313,6 +342,7 @@ export class Match {
     this.ball.shotType = null;
     this.ball.fromCross = false;
     this.ball.cooldown = 0;
+    this.ball.offsideFlag = null;
     this.ball.lastTeam = kickingTeam;
     // give the ball to a central player of the kicking team
     const central = this.players
@@ -337,6 +367,7 @@ export class Match {
     this.time += DT;
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
     if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
+    for (const p of this.players) if (p.dribbleTimer > 0) p.dribbleTimer -= DT;
     if (this.ball.owner) this.possessionTicks[this.ball.owner.team]++;
     this.updateFatigue();
     this.narrateBuildup();
@@ -393,16 +424,43 @@ export class Match {
   }
 
   private gkTarget(gk: Player): Vec {
-    // Stay near the line, narrowing the angle by coming out as the ball nears.
+    const b = this.ball;
     const ownGoalX = gk.team === 0 ? 0 : PITCH_LENGTH;
-    const d = Math.abs(this.ball.pos.x - ownGoalX);
-    // Always a couple of metres off the line (so the keeper never renders
-    // behind the goal and can still reach shots), edging out as the ball nears.
-    const off = d < 10 ? Math.min(3.0, 2.2 + (10 - d) * 0.1) : 2.2;
-    const x = gk.team === 0 ? off : PITCH_LENGTH - off;
-    // hug goal centre, shading only slightly toward the ball so both posts
-    // stay within reach
-    const y = Math.max(32, Math.min(36, 34 + (this.ball.pos.y - 34) * 0.12));
+    const side = gk.team === 0 ? 1 : -1; // direction out into the pitch
+    const toGoal = Math.abs(b.pos.x - ownGoalX);
+
+    // 1) SHOT incoming on our goal: spring across the line to the ball's
+    // projected crossing point — this is the keeper diving to make the save.
+    if (b.isShot && b.shooter && b.shooter.team !== gk.team && toGoal < 32) {
+      const off = clamp(toGoal * 0.1, 1.4, 3.2);
+      const y = clamp(b.aimY, GOAL_Y_MIN - 1.2, GOAL_Y_MAX + 1.2);
+      return { x: ownGoalX + side * off, y };
+    }
+
+    // 2) Clean through on goal: a ball / runner has got beyond our last
+    // defender. Rush out to narrow the angle (and tempt a chip).
+    const threat =
+      b.owner && b.owner.team !== gk.team
+        ? b.owner
+        : b.receiver && b.receiver.team !== gk.team && b.airTimer <= 0
+          ? b.receiver
+          : null;
+    if (threat) {
+      const dThreat = Math.abs(threat.pos.x - ownGoalX);
+      const defs = this.players.filter((p) => p.team === gk.team && p.role !== "GK");
+      const lastDef = defs.length ? Math.min(...defs.map((p) => Math.abs(p.pos.x - ownGoalX))) : 99;
+      if (dThreat < 24 && dThreat <= lastDef + 1.5) {
+        const off = clamp(dThreat * 0.5, 2.5, 13);
+        const y = clamp(34 + (threat.pos.y - 34) * 0.6, GOAL_Y_MIN - 2, GOAL_Y_MAX + 2);
+        return { x: ownGoalX + side * off, y };
+      }
+    }
+
+    // 3) Normal positioning: hold just off the line near the six-yard box,
+    // edging out a touch as the ball nears and shading slightly toward it.
+    const off = toGoal < 10 ? Math.min(3.0, 2.2 + (10 - toGoal) * 0.1) : 2.2;
+    const x = ownGoalX + side * off;
+    const y = clamp(34 + (b.pos.y - 34) * 0.12, 32, 36);
     return { x, y };
   }
 
@@ -413,8 +471,15 @@ export class Match {
     for (const p of this.players) {
       if (p === b.owner) {
         const g = this.oppGoal(p.team);
-        const d = norm(sub(g, p.pos));
-        p.target = clampPitch({ x: p.pos.x + d.x * 10, y: p.pos.y + d.y * 10 });
+        const dir = norm(sub(g, p.pos));
+        const dg = dist(p.pos, g);
+        // Carry toward goal, but PULL UP around the edge of the box rather than
+        // dribbling onto the goal line — unless he's burst clear of his man
+        // (dribbleTimer), when he can drive in to round the keeper. This stops
+        // every shot happening from right on the six-yard line.
+        const minDist = p.dribbleTimer > 0 ? 5 : 11;
+        const reach = Math.max(0, Math.min(10, dg - minDist));
+        p.target = clampPitch({ x: p.pos.x + dir.x * reach, y: p.pos.y + dir.y * reach });
         continue;
       }
       if (p.role === "GK") {
@@ -492,6 +557,38 @@ export class Match {
           taken.push(sp);
         }
       }
+
+      // Off-ball runs in behind: forwards with sharp movement (or the
+      // "runs in behind" trait) time runs into the channel beyond the last
+      // defender, giving the carrier a through-ball target instead of everyone
+      // coming to feet. This is where Off the Ball turns into chances.
+      const adir = possTeam === 0 ? 1 : -1;
+      const defs = this.players.filter((q) => q.team !== possTeam && q.role !== "GK");
+      const lineX = defs.length
+        ? adir > 0
+          ? Math.max(...defs.map((q) => q.pos.x))
+          : Math.min(...defs.map((q) => q.pos.x))
+        : adir > 0
+          ? 80
+          : 25;
+      const teamInAttack = adir > 0 ? b.pos.x > 45 : b.pos.x < 60;
+      if (teamInAttack) {
+        const lo = adir > 0 ? 50 : 5;
+        const hi = adir > 0 ? 100 : 55;
+        for (const p of this.players) {
+          if (p.team !== possTeam || p === b.owner) continue;
+          const fwd = p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
+          if (!fwd) continue;
+          const eager = p.traits.has("runs_in_behind");
+          if (!eager && p.attrs.offTheBall < 15) continue;
+          // make the run in bursts, not constantly — timing scales with movement
+          const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
+          if (phase < (eager ? 0.3 : 0.6)) continue;
+          const targetX = clamp(lineX + adir * (5 + p.attrs.offTheBall * 0.2), lo, hi);
+          const targetY = clamp(34 + (p.pos.y - 34) * 0.8, 8, 60);
+          p.target = clampPitch({ x: targetX, y: targetY });
+        }
+      }
     } else if (b.receiver && !b.isShot) {
       // a pass is in flight: the intended receiver runs onto the ball (so passes
       // connect intentionally instead of rolling to whoever is nearest), while
@@ -536,20 +633,23 @@ export class Match {
 
     const t = this.tac(owner.team);
 
-    // continuous tackle pressure: a tackling/aggression/strength duel against
-    // the carrier's dribbling/balance/composure (sharpness falls with fatigue)
     const challenger = this.nearestOutfield(
       (1 - owner.team) as 0 | 1,
       owner.pos,
     );
-    if (challenger && dist(challenger.pos, owner.pos) < 1.3 && owner.role !== "GK") {
+    const press = challenger ? dist(challenger.pos, owner.pos) : 99;
+
+    // residual tackle pressure: a defender can still nick it off a player who
+    // dwells on the ball under a tight challenge (tackling vs balance/composure)
+    if (press < 1.3 && owner.role !== "GK" && challenger) {
       const ca = challenger.attrs;
       const oa = owner.attrs;
       const tackleSkill =
         (ca.tackling + ca.aggression * 0.4 + ca.strength * 0.3) * this.sharp(challenger);
       const retain =
-        (oa.dribbling + oa.balance * 0.4 + oa.composure * 0.3) * this.sharp(owner);
-      const p = clamp(0.005, 0.08, 0.03 * (tackleSkill / retain));
+        (oa.dribbling + oa.balance * 0.4 + oa.composure * 0.3) * this.sharp(owner) *
+        (owner.dribbleTimer > 0 ? 1.4 : 1); // hard to dispossess mid-burst
+      const p = clamp(0.004, 0.06, 0.018 * (tackleSkill / retain));
       if (this.rng.chance(p)) {
         this.turnover(challenger, "tackle");
         return;
@@ -576,7 +676,8 @@ export class Match {
     // SHOOT — decisively when in a good position. Quality combines closeness
     // and angle (central beats a tight byline angle); space and finishing scale
     // it up. Flair makes a player more willing to try from distance.
-    const inRange = dGoal < 20 + this.directness(owner.team) * 4;
+    const fromDistance = owner.traits.has("shoots_from_distance");
+    const inRange = dGoal < 20 + this.directness(owner.team) * 4 + (fromDistance ? 6 : 0);
     let goodChance = false;
     if (inRange) {
       const shootAttr =
@@ -585,14 +686,31 @@ export class Match {
           : owner.attrs.finishing * 0.4 + owner.attrs.longShots * 0.6;
       const closeness = Math.max(0, 1 - dGoal / 22);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.024;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.02;
       if (space < 2.5) shotProb *= 0.5; // crowded out
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
-      if (dGoal < 7 && angle > 0.75 && space > 4.5) shotProb = Math.max(shotProb, 0.15);
+      if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
+      // a clear sight of goal with space: take it on rather than dawdle (this is
+      // a floor, only when genuinely unmarked — keeps the shot count realistic)
+      if (dGoal < 14 && angle > 0.6 && space > 5) shotProb = Math.max(shotProb, 0.1);
+      if (dGoal < 8 && angle > 0.75 && space > 6) shotProb = Math.max(shotProb, 0.2); // big chance
       goodChance = closeness * angle > 0.35;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
+        return;
+      }
+    }
+
+    // TAKE-ON (1v1) — evaluated at the decision slice (so it happens at a
+    // realistic rate, not every tick). When a defender is tight and there's
+    // room to attack, a dribbler tries to beat his man rather than just recycle.
+    if (space < 2.4 && challenger && this.spaceAhead(owner) > 4) {
+      let want = 0.004 + (owner.attrs.dribbling / 20) * 0.012 + (owner.attrs.flair / 20) * 0.01;
+      if (owner.traits.has("likes_to_dribble")) want += 0.025;
+      if (this.inFinalThird(owner)) want *= 1.3; // commit more in dangerous areas
+      if (this.rng.chance(want)) {
+        this.attemptTakeOn(owner, challenger);
         return;
       }
     }
@@ -629,6 +747,34 @@ export class Match {
     // otherwise: keep dribbling (movement already aims at goal)
   }
 
+  /** Resolve a 1v1 take-on: dribbling/agility/balance/flair vs the defender's
+   * tackling/marking/anticipation. Winning bursts past the man; losing is a
+   * tackle. */
+  private attemptTakeOn(owner: Player, challenger: Player): void {
+    this.takeOnAtt++;
+    const oa = owner.attrs;
+    const ca = challenger.attrs;
+    const beat =
+      (oa.dribbling * 0.5 + oa.agility * 0.25 + oa.balance * 0.15 + oa.flair * 0.1) *
+      this.sharp(owner);
+    const stop =
+      (ca.tackling * 0.5 + ca.marking * 0.2 + ca.anticipation * 0.2 + ca.strength * 0.1) *
+      this.sharp(challenger);
+    if (this.rng.chance(beat / (beat + stop))) {
+      this.takeOnWon++;
+      owner.dribbleTimer = 1.2; // burst of pace & control
+      // knock it past and leave the beaten man trailing behind the carrier
+      const fwd = norm(sub(this.oppGoal(owner.team), owner.pos));
+      challenger.pos = clampPitch({ x: owner.pos.x - fwd.x * 3, y: owner.pos.y - fwd.y * 3 });
+      challenger.target = { ...challenger.pos };
+      if (this.inFinalThird(owner) && this.crng.chance(0.55)) {
+        this.emit("take_on", owner.team, owner.name, this.vary([`${owner.name} beats his man!`, `${owner.name} skips past the challenge!`, `Lovely skill from ${owner.name}!`, `${owner.name} dances past the defender!`]));
+      }
+    } else {
+      this.turnover(challenger, "tackle");
+    }
+  }
+
   /**
    * Choose the best teammate to pass to AND the type of pass that fits the
    * situation. Vision lets a player even *see* the harder options (through /
@@ -658,9 +804,11 @@ export class Match {
       const lateral = Math.abs(p.pos.y - owner.pos.y);
       const tgtGoal = dist(p.pos, goal);
 
-      // decide the most appropriate pass type for THIS teammate
+      // decide the most appropriate pass type for THIS teammate. Players who
+      // "try killer balls" look for the through ball more readily.
+      const killer = owner.traits.has("tries_killer_balls");
       let type: PassType;
-      if (advancement > 9 && spaceAhead > 11 && this.rng.chance(sees * 0.55)) {
+      if (advancement > 9 && spaceAhead > (killer ? 8 : 11) && this.rng.chance(sees * (killer ? 0.85 : 0.55))) {
         type = "through"; // a runner with clear space behind the line (vision)
       } else if (d > 26 && (lateral > 22 || advancement > 14) && this.rng.chance(0.3 + sees * 0.4)) {
         type = "lofted"; // switch play or beat a high line over the top
@@ -754,6 +902,43 @@ export class Match {
     this.emit("cross", crosser.team, crosser.name, this.vary([`${crosser.name} swings in a cross...`, `${crosser.name} whips it into the box...`, `Cross from ${crosser.name}...`, `${crosser.name} delivers from the flank...`]));
   }
 
+  /** Set up and deliver a corner: load the box with the best aerial players,
+   * then swing it in for the existing aerial-duel logic to resolve (most are
+   * cleared; some become headers on goal). */
+  private concedeCorner(attackTeam: 0 | 1): void {
+    this.cornerCount++;
+    const goalX = attackTeam === 0 ? PITCH_LENGTH : 0;
+    const cornerY = this.rng.chance(0.5) ? 1.5 : PITCH_WIDTH - 1.5;
+    const boxX = attackTeam === 0 ? PITCH_LENGTH - 8 : 8;
+    const defX = attackTeam === 0 ? PITCH_LENGTH - 5 : 5;
+    // best delivery man takes it
+    const taker = this.players
+      .filter((p) => p.team === attackTeam && p.role !== "GK")
+      .sort((a, c) => c.attrs.crossing + c.attrs.technique - (a.attrs.crossing + a.attrs.technique))[0]!;
+    // load the box with the tallest attackers
+    const attackers = this.players
+      .filter((p) => p.team === attackTeam && p !== taker && p.role !== "GK")
+      .sort((a, c) => c.attrs.heading + c.attrs.jumpingReach - (a.attrs.heading + a.attrs.jumpingReach));
+    attackers.slice(0, 4).forEach((p, i) => {
+      p.pos = clampPitch({ x: boxX, y: 28 + i * 4 });
+      p.target = { ...p.pos };
+    });
+    // defenders pack the six-yard area
+    this.players
+      .filter((p) => p.team !== attackTeam && p.role !== "GK")
+      .slice(0, 5)
+      .forEach((p, i) => {
+        p.pos = clampPitch({ x: defX, y: 26 + i * 3.5 });
+        p.target = { ...p.pos };
+      });
+    taker.pos = { x: goalX, y: cornerY };
+    this.ball.owner = taker;
+    this.ball.pos = { ...taker.pos };
+    this.emit("corner", attackTeam, taker.name, this.vary([`Corner to ${this.shortName(attackTeam)}.`, `${taker.name} stands over the corner...`, `Corner kick, ${this.shortName(attackTeam)}...`]));
+    const target = this.bestBoxTarget(taker) ?? attackers[0]!;
+    this.cross(taker, target);
+  }
+
   /** Open space ahead of a player toward the goal they attack (for runs). */
   private spaceAhead(p: Player): number {
     const goal = this.oppGoal(p.team);
@@ -774,9 +959,12 @@ export class Match {
     if (keeperOff > 5 && dGoal > 9 && dGoal < 22 && this.rng.chance((a.composure + a.technique) / 60)) {
       return "chip";
     }
+    // players who "place shots" pick their spot rather than blasting it
+    const placer = shooter.traits.has("places_shots");
     // distance or hurried: blast it (long shots / power); flair adds variety
     if (dGoal > 17 || space < 2.2) {
-      if (this.rng.chance(0.55 + a.flair / 50)) return "power";
+      const powerChance = (0.55 + a.flair / 50) * (placer ? 0.5 : 1);
+      if (this.rng.chance(powerChance)) return "power";
     }
     return "placed";
   }
@@ -834,6 +1022,12 @@ export class Match {
     b.lastTeam = passer.team;
     b.cooldown = 0.2;
     b.vel = { x: dir.x * speed, y: dir.y * speed };
+    // OFFSIDE: a forward ball played to a teammate who has strayed beyond the
+    // second-last defender is flagged — judged when he plays it (resolveLooseBall)
+    b.offsideFlag =
+      (type === "through" || type === "lofted" || type === "driven") && this.isOffside(target, passer)
+        ? target.team
+        : null;
     // only narrate genuinely dangerous through balls (final third, occasionally)
     const attHalf = passer.team === 0 ? passer.pos.x > 60 : passer.pos.x < 45;
     if (type === "through" && passer.role !== "GK" && attHalf && this.crng.chance(0.4)) {
@@ -867,7 +1061,7 @@ export class Match {
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
         speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
     }
-    let spread = ((1 - shootAttr / 20) * 6 + 4.5 + dGoal * 0.12 + pressure + this.wx.shotScatter) * spreadMul;
+    let spread = ((1 - shootAttr / 20) * 5.5 + 2.8 + dGoal * 0.1 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);
@@ -898,6 +1092,7 @@ export class Match {
     this.ball.vel = { x: dir.x * speed, y: dir.y * speed };
     this.shots[shooter.team]++;
     this.shotTypeCounts[type]++;
+    this.shotDist.push(dGoal);
 
     const n = shooter.name;
     const line =
@@ -923,10 +1118,13 @@ export class Match {
     this.ball.passType = null;
     this.ball.shotType = null;
     this.ball.fromCross = false;
+    this.ball.offsideFlag = null;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
     // only a fraction of micro-duels count as a "tackle won" for the stat sheet
     if (kind === "tackle" && this.crng.chance(0.12)) winner.stat.tackles++;
+    // a committed tackle occasionally leaves the tackler with a knock (rare)
+    if (kind === "tackle") this.maybeInjure(winner, 0.001);
     // narrate only some final-third turnovers, so commentary stays readable
     if (inFinalThird && this.crng.chance(0.3)) {
       this.emit(
@@ -943,6 +1141,33 @@ export class Match {
   private inFinalThird(p: Player): boolean {
     // is the player in the third nearest the goal they're attacking?
     return p.team === 0 ? p.pos.x > 70 : p.pos.x < 35;
+  }
+
+  /** Is the receiver in an offside position relative to where the pass is played
+   * from? Offside = in the attacking half, ahead of the ball, and beyond the
+   * second-last defender (the last outfielder, with the keeper deepest). */
+  private isOffside(receiver: Player, passer: Player): boolean {
+    const oppGoal = this.oppGoal(receiver.team);
+    const inAttHalf = receiver.team === 0 ? receiver.pos.x > 52.5 : receiver.pos.x < 52.5;
+    if (!inAttHalf) return false;
+    if (dist(receiver.pos, oppGoal) >= dist(passer.pos, oppGoal)) return false; // not ahead of ball
+    const line = this.players
+      .filter((p) => p.team !== receiver.team)
+      .map((p) => Math.abs(p.pos.x - oppGoal.x))
+      .sort((a, b) => a - b);
+    const lineDist = line[1] ?? line[0] ?? 0; // second-last defender
+    return Math.abs(receiver.pos.x - oppGoal.x) < lineDist - 0.5;
+  }
+
+  /** Pull play back for an offside: free kick (restart) to the defending side. */
+  private awardOffside(offsideTeam: 0 | 1): void {
+    this.offsideCount++;
+    const defTeam = (1 - offsideTeam) as 0 | 1;
+    const gk = this.players.find((p) => p.team === defTeam && p.role === "GK")!;
+    this.claim(gk);
+    if (this.crng.chance(0.5)) {
+      this.emit("offside", offsideTeam, undefined, this.vary([`Flag's up — offside.`, `Offside! The run was too early.`, `Caught offside.`]));
+    }
   }
 
   // ---- integration ----
@@ -992,6 +1217,7 @@ export class Match {
     b.fromCross = false;
     b.airTimer = 0;
     b.judged = false;
+    b.offsideFlag = null;
     b.lastTeam = p.team;
   }
 
@@ -1022,8 +1248,8 @@ export class Match {
           const ga = gk.attrs;
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
-            0.2,
-            Math.min(0.94, (0.45 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
+            0.15,
+            Math.min(0.92, (0.30 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
@@ -1034,8 +1260,10 @@ export class Match {
             this.shotsOnTarget[shooter.team]++; // on target and saved
             shooter.stat.sot++;
             gk.stat.saves++;
-            this.claim(gk);
             this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
+            // a hard shot is often parried behind for a corner rather than held
+            if (this.rng.chance(0.45)) this.concedeCorner(shooter.team);
+            else this.claim(gk);
           }
           // if beaten: leave it — the goal is recorded (and counted) at the line
           return;
@@ -1057,6 +1285,16 @@ export class Match {
 
     const fromOpponent = b.lastTeam !== null && b.lastTeam !== claimant.team;
 
+    // (1a) OFFSIDE: if a flagged attacker is first to the ball, blow it up; if a
+    // defender gets there first, wave play on (advantage).
+    if (b.offsideFlag !== null) {
+      if (claimant.team === b.offsideFlag) {
+        this.awardOffside(b.offsideFlag);
+        return;
+      }
+      b.offsideFlag = null;
+    }
+
     // (1b) A cross has come down: contest it. An attacker who wins the aerial
     // duel heads at goal; otherwise a defender heads it clear. Most crosses are
     // cleared — exactly as in real football.
@@ -1077,7 +1315,9 @@ export class Match {
           return;
         }
         if (def) {
-          this.claim(def); // defender heads it clear
+          // defender heads it clear — sometimes only as far as a corner
+          if (this.rng.chance(0.3)) this.concedeCorner(claimant.team);
+          else this.claim(def);
           return;
         }
       }
@@ -1086,23 +1326,34 @@ export class Match {
 
     // (2) An outfield defender may block a shot with their body
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
-      if (this.rng.chance(0.18)) {
+      if (this.rng.chance(0.1)) {
         claimant.stat.blocks++;
-        this.claim(claimant);
         this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
+        // a block often deflects behind for a corner
+        if (this.rng.chance(0.5) && b.shooter) this.concedeCorner(b.shooter.team);
+        else this.claim(claimant);
       }
       return;
     }
 
-    // open-play loose ball (pass, clearance, deflection): first touch / handling
+    // open-play loose ball (pass, clearance, deflection): first touch / handling.
+    // A tight defender and tired legs both make a clean first touch harder — a
+    // heavy touch spills it loose (the ball simply isn't claimed this tick).
     const ca = claimant.attrs;
     const controlAttr =
       claimant.role === "GK" ? ca.handling : (ca.firstTouch + ca.technique) / 2;
-    let controlProb = 0.5 + controlAttr / 45;
+    let controlProb = (0.55 + controlAttr / 45) * this.sharp(claimant);
+    if (claimant.role !== "GK") {
+      const presser = this.nearestOutfield((1 - claimant.team) as 0 | 1, b.pos);
+      if (presser && dist(presser.pos, b.pos) < 2.5) {
+        controlProb *= 0.78 + (ca.composure / 20) * 0.12; // composed under pressure
+      }
+    }
     // intercepting an opponent's pass cleanly is harder than collecting your
     // own — this keeps possession with the passing side more often (realistic
     // ~75-80% completion) rather than constant giveaways
     if (b.lastTeam !== null && b.lastTeam !== claimant.team) controlProb *= 0.55;
+    controlProb = clamp(controlProb, 0.15, 0.95);
     if (!this.rng.chance(controlProb)) return;
     const completedPass = b.lastTeam === claimant.team;
     const passer = b.passer;
@@ -1315,6 +1566,8 @@ export class Match {
         hasBall: p === this.ball.owner,
         rating: this.playerRating(p),
         goals: p.stat.goals,
+        fitness: Math.round(p.condition * 100),
+        injured: p.injured,
       })),
       events: this.events,
     };

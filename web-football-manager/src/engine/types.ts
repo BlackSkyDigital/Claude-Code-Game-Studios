@@ -34,11 +34,27 @@ export type Role =
 import type { Attrs } from "./attributes.js";
 export type { Attrs };
 
+/**
+ * Preferred Player Moves (FM-style traits). These bias a player's on-ball and
+ * off-ball decisions toward the things they habitually do in real life, on top
+ * of their raw attributes — so two players with the same numbers still feel
+ * different.
+ */
+export type Trait =
+  | "shoots_from_distance" // more willing to pull the trigger from range
+  | "places_shots" // favours placed/finesse finishes over power
+  | "tries_killer_balls" // looks for the through ball more often
+  | "likes_to_dribble" // attempts more 1v1 take-ons
+  | "runs_in_behind" // times runs into the space behind the line
+  | "cuts_inside" // wide player drifts infield onto his stronger foot
+  | "gets_forward"; // full-back / midfielder pushes up to join attacks
+
 export interface PlayerDef {
   name: string;
   number: number;
   role: Role;
   attrs: Attrs;
+  traits?: Trait[];
 }
 
 export interface TeamDef {
@@ -66,8 +82,14 @@ export type MatchEventType =
   | "block"
   | "cross"
   | "key_pass"
+  | "take_on"
   | "tackle"
   | "interception"
+  | "foul"
+  | "offside"
+  | "injury"
+  | "corner"
+  | "penalty"
   | "throw_in"
   | "goal_kick"
   | "half_time"

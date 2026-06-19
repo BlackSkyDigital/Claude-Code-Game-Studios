@@ -18,6 +18,11 @@ let homeWins = 0;
 let draws = 0;
 let awayWins = 0;
 let totalShots = 0;
+let totalTakeOnAtt = 0;
+let totalTakeOnWon = 0;
+let totalCorners = 0;
+let totalPens = 0;
+let totalOffsides = 0;
 const scoreline = new Map<string, number>();
 
 for (let seed = 1; seed <= N; seed++) {
@@ -27,6 +32,11 @@ for (let seed = 1; seed <= N; seed++) {
   homeGoals += h;
   awayGoals += a;
   totalShots += m.shots[0] + m.shots[1];
+  totalTakeOnAtt += m.takeOnAtt;
+  totalTakeOnWon += m.takeOnWon;
+  totalCorners += m.cornerCount;
+  totalPens += m.penaltyCount;
+  totalOffsides += m.offsideCount;
   if (h > a) homeWins++;
   else if (h < a) awayWins++;
   else draws++;
@@ -39,6 +49,12 @@ console.log(`Avg goals/match : ${((homeGoals + awayGoals) / N).toFixed(2)}`);
 console.log(`Avg ${home.short} : ${(homeGoals / N).toFixed(2)}`);
 console.log(`Avg ${away.short} : ${(awayGoals / N).toFixed(2)}`);
 console.log(`Avg shots/match : ${(totalShots / N).toFixed(1)}`);
+console.log(
+  `Avg take-ons    : ${(totalTakeOnAtt / N).toFixed(1)} attempted, ${(totalTakeOnWon / N).toFixed(1)} won (${totalTakeOnAtt ? Math.round((totalTakeOnWon / totalTakeOnAtt) * 100) : 0}%)`,
+);
+console.log(`Avg corners     : ${(totalCorners / N).toFixed(1)}`);
+console.log(`Avg offsides    : ${(totalOffsides / N).toFixed(1)}`);
+console.log(`Avg penalties   : ${(totalPens / N).toFixed(2)}`);
 console.log(
   `Results         : ${home.short} ${homeWins} / Draw ${draws} / ${away.short} ${awayWins}`,
 );

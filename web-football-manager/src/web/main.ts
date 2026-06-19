@@ -117,14 +117,19 @@ let skipSpeed = 48; // sim-seconds per real-second while skipping between highli
 // level is <= its threshold.
 const EVENT_LEVEL: Record<string, number> = {
   goal: 1,
+  penalty: 1, // a spot kick is always a headline moment
   save: 2, // an on-target chance the keeper had to stop
   block: 2,
   shot: 3,
   shot_off: 3,
+  take_on: 3, // a player beating his man is worth seeing
   cross: 4,
   key_pass: 4,
+  corner: 4,
+  offside: 4,
   interception: 4,
   tackle: 4,
+  injury: 4,
 };
 const MODE_THRESHOLD: Record<string, number> = {
   goals: 1,
@@ -464,10 +469,17 @@ const ROLE_ORDER: Record<string, number> = {
 function ratingColor(r: number): string {
   return r >= 7.5 ? "#3fb950" : r >= 6.5 ? "#8b949e" : "#d29922";
 }
+function fitnessColor(f: number): string {
+  return f >= 80 ? "#3fb950" : f >= 65 ? "#d29922" : "#f85149";
+}
 function rrow(p: Snapshot["players"][number] | undefined): string {
   if (!p) return "<div></div>";
   const c = ratingColor(p.rating);
-  return `<div class="rrow"><span class="rnum">${p.number}</span><span class="rname">${p.name}${p.goals ? " ⚽" : ""}</span><span class="rval" style="background:${c}22;color:${c}">${p.rating.toFixed(1)}</span></div>`;
+  const fc = fitnessColor(p.fitness);
+  const inj = p.injured ? ' <span title="carrying a knock">🩹</span>' : "";
+  // a slim fitness bar so individual stamina/injury is visible at a glance
+  const bar = `<span class="fbar" title="fitness ${p.fitness}%"><span style="width:${p.fitness}%;background:${fc}"></span></span>`;
+  return `<div class="rrow"><span class="rnum">${p.number}</span><span class="rname">${p.name}${p.goals ? " ⚽" : ""}${inj}</span>${bar}<span class="rval" style="background:${c}22;color:${c}">${p.rating.toFixed(1)}</span></div>`;
 }
 function updateRatings(snap: Snapshot): void {
   const home = snap.players
@@ -490,9 +502,13 @@ function startReplay(): void {
 
 const FLASH: Record<string, { text: string; color: string }> = {
   goal: { text: "⚽  GOAL!", color: "#7ef08a" },
+  penalty: { text: "🎯  PENALTY!", color: "#7ef08a" },
   save: { text: "🧤  SAVED!", color: "#7ec8ff" },
   block: { text: "🛡  BLOCKED!", color: "#ff8e8e" },
   shot_off: { text: "↗  OFF TARGET", color: "#ffce5a" },
+  take_on: { text: "✨  BEATS HIS MAN", color: "#d2a8ff" },
+  corner: { text: "🚩  CORNER", color: "#ffb066" },
+  offside: { text: "🚩  OFFSIDE", color: "#9aa4b2" },
 };
 
 function processEvents(snap: Snapshot): void {

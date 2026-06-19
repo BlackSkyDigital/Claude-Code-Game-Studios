@@ -78,7 +78,11 @@
       #commNow.c-block { color: #ff8e8e; }
       #commNow.c-shot { color: #ffd36a; }
       #commNow.c-shot_off { color: #ffce5a; }
-      #commNow.c-cross, #commNow.c-key_pass { color: #ffb066; }
+      #commNow.c-cross, #commNow.c-key_pass, #commNow.c-corner { color: #ffb066; }
+      #commNow.c-take_on { color: #d2a8ff; }
+      #commNow.c-penalty { color: #7ef08a; }
+      #commNow.c-offside { color: #9aa4b2; }
+      #commNow.c-injury { color: #ff9b9b; }
 
       .panel {
         background: var(--panel); border: 1px solid var(--line);
@@ -113,6 +117,8 @@
       .ratings .rrow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
       .ratings .rnum { color: var(--muted); width: 18px; text-align: right; font-variant-numeric: tabular-nums; }
       .ratings .rname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ratings .fbar { width: 30px; height: 5px; background: #21262d; border-radius: 3px; overflow: hidden; flex: none; }
+      .ratings .fbar > span { display: block; height: 100%; }
       .ratings .rval { font-weight: 700; font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; }
       #feed { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
       .ev { font-size: 12px; padding: 5px 8px; border-radius: 5px; background: #0d1117;
