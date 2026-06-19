@@ -56,6 +56,7 @@ interface Ball {
   owner: Player | null;
   lastTeam: 0 | 1 | null; // team that last touched it (for interceptions/credit)
   shooter: Player | null; // set while a shot is in flight
+  receiver: Player | null; // intended target of an in-flight pass (runs onto it)
   isShot: boolean;
   aimY: number; // projected crossing point of the current shot (for on-target)
   judged: boolean; // whether the current shot has already been adjudicated
@@ -165,6 +166,7 @@ export class Match {
       owner: null,
       lastTeam: null,
       shooter: null,
+      receiver: null,
       isShot: false,
       aimY: 34,
       judged: false,
@@ -250,6 +252,7 @@ export class Match {
     this.ball.pos = { ...CENTER };
     this.ball.vel = { x: 0, y: 0 };
     this.ball.shooter = null;
+    this.ball.receiver = null;
     this.ball.isShot = false;
     this.ball.cooldown = 0;
     this.ball.lastTeam = kickingTeam;
@@ -418,8 +421,16 @@ export class Match {
           taken.push(sp);
         }
       }
+    } else if (b.receiver && !b.isShot) {
+      // a pass is in flight: the intended receiver runs onto the ball (so passes
+      // connect intentionally instead of rolling to whoever is nearest), while
+      // the closest opponent moves to contest it
+      const lead = clampPitch({ x: b.pos.x + b.vel.x * 0.3, y: b.pos.y + b.vel.y * 0.3 });
+      b.receiver.target = lead;
+      const opp = this.nearestOutfield((1 - b.receiver.team) as 0 | 1, b.pos);
+      if (opp) opp.target = { ...b.pos };
     } else {
-      // loose ball: nearest of each side chases it
+      // genuinely loose (shot rebound, clearance): nearest of each side chases
       const a = this.nearestOutfield(0, b.pos);
       const c = this.nearestOutfield(1, b.pos);
       if (a) a.target = { ...b.pos };
@@ -481,7 +492,8 @@ export class Match {
 
     const goal = this.oppGoal(owner.team);
     const dGoal = dist(owner.pos, goal);
-    const pressure = challenger ? dist(challenger.pos, owner.pos) : 99;
+    // distance to the nearest defender — large = space, small = under pressure
+    const space = challenger ? dist(challenger.pos, owner.pos) : 99;
 
     // goalkeepers just distribute the ball upfield
     if (owner.role === "GK") {
@@ -490,26 +502,36 @@ export class Match {
       return;
     }
 
-    // shoot — finishing close in, long shots from distance; direct/attacking
-    // sides pull the trigger more readily and from a touch further out
-    if (dGoal < 19 + this.directness(owner.team) * 5) {
+    // SHOOT — decisively when in a good position. Quality combines closeness
+    // and angle (central is better than tight by the byline); space and the
+    // finishing/long-shots attribute scale it up.
+    const inRange = dGoal < 20 + this.directness(owner.team) * 4;
+    let goodChance = false;
+    if (inRange) {
       const shootAttr =
         dGoal < 13
           ? owner.attrs.finishing
-          : owner.attrs.finishing * 0.35 + owner.attrs.longShots * 0.65;
-      let shotProb = (shootAttr / 20) * Math.max(0, 1 - dGoal / 22) * 0.072;
-      shotProb *= 0.9 + 0.3 * t.mentality;
-      if (pressure < 3) shotProb *= 0.7;
+          : owner.attrs.finishing * 0.4 + owner.attrs.longShots * 0.6;
+      const closeness = Math.max(0, 1 - dGoal / 22);
+      const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.042;
+      if (space < 2.5) shotProb *= 0.5; // crowded out
+      shotProb *= 0.85 + 0.3 * t.mentality;
+      // a clear, close chance in front of goal: take it
+      if (dGoal < 7 && angle > 0.75 && space > 4.5) shotProb = Math.max(shotProb, 0.15);
+      goodChance = closeness * angle > 0.35;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner);
         return;
       }
     }
 
-    // pass — more likely under pressure
+    // PASS — likely when pressed or building up, but NOT when we just passed up
+    // a good shooting chance (then prefer to shoot/dribble, not recycle it out)
     const target = this.bestPassTarget(owner);
     if (target) {
-      const passProb = 0.25 + 0.4 * (1 - Math.min(1, pressure / 6));
+      let passProb = 0.3 + 0.4 * (1 - Math.min(1, space / 6));
+      if (goodChance) passProb *= 0.4;
       if (this.rng.chance(passProb)) {
         this.pass(owner, target);
         return;
@@ -532,11 +554,16 @@ export class Match {
       const advancement = dist(owner.pos, goal) - dist(p.pos, goal); // +ve = more advanced
       const opp = this.nearestOutfield((1 - owner.team) as 0 | 1, p.pos);
       const openness = opp ? Math.min(12, dist(opp.pos, p.pos)) : 12;
+      // bonus for finding a teammate in a shooting position (through balls /
+      // cut-backs) so possession actually turns into chances
+      const tgtGoal = dist(p.pos, goal);
+      const shootingBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.9 : 0;
       // direct play prizes progress and tolerates risk/range; possession play
-      // prizes keeping the ball — open, short options
+      // prizes keeping the ball — but always value progress over square balls
       const score =
-        advancement * (0.4 + 1.0 * D) +
-        openness * (1.7 - 0.9 * D) -
+        advancement * (0.7 + 0.7 * D) +
+        openness * (1.2 - 0.7 * D) +
+        shootingBonus -
         d * (0.12 - 0.06 * D);
       if (score > bestScore) {
         bestScore = score;
@@ -562,6 +589,7 @@ export class Match {
     this.passesAtt[passer.team]++;
     this.ball.owner = null;
     this.ball.shooter = null;
+    this.ball.receiver = target; // the receiver will run onto it
     this.ball.isShot = false;
     this.ball.lastTeam = passer.team;
     this.ball.cooldown = 0.2;
@@ -580,7 +608,7 @@ export class Match {
     const a = shooter.attrs;
     const shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.4 + a.longShots * 0.6;
     // composure tightens the spread; pressure, distance, weather and fatigue widen it
-    let spread = (1 - shootAttr / 20) * 6 + 3.9 + dGoal * 0.12 + pressure + this.wx.shotScatter;
+    let spread = (1 - shootAttr / 20) * 6 + 4.5 + dGoal * 0.12 + pressure + this.wx.shotScatter;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);
@@ -589,6 +617,7 @@ export class Match {
     const speed = 20 + shootAttr * 0.35;
     this.ball.owner = null;
     this.ball.shooter = shooter;
+    this.ball.receiver = null;
     this.ball.isShot = true;
     this.ball.aimY = aimY;
     this.ball.judged = false;
@@ -603,6 +632,7 @@ export class Match {
     this.ball.owner = winner;
     this.ball.vel = { x: 0, y: 0 };
     this.ball.shooter = null;
+    this.ball.receiver = null;
     this.ball.isShot = false;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
@@ -662,6 +692,7 @@ export class Match {
     b.vel = { x: 0, y: 0 };
     b.pos = { ...p.pos };
     b.shooter = null;
+    b.receiver = null;
     b.isShot = false;
     b.judged = false;
     b.lastTeam = p.team;
@@ -692,7 +723,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           const saveProb = Math.max(
             0.2,
-            Math.min(0.93, (0.38 + saveSkill / 42) * (1 - 0.3 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.45 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           if (this.rng.chance(saveProb)) {
             this.shotsOnTarget[shooter.team]++; // on target and saved
