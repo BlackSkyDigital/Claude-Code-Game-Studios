@@ -105,6 +105,11 @@
       .stat .sv { font-weight: 700; font-variant-numeric: tabular-nums; width: 48px; }
       .stat .sv:last-child { text-align: right; }
       .stat .sl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+      .ratings { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; max-height: 320px; overflow-y: auto; }
+      .ratings .rrow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
+      .ratings .rnum { color: var(--muted); width: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+      .ratings .rname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ratings .rval { font-weight: 700; font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; }
       #feed { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
       .ev { font-size: 12px; padding: 5px 8px; border-radius: 5px; background: #0d1117;
         border-left: 3px solid var(--line); }
@@ -193,6 +198,23 @@
                 <button class="ghost" data-speed="90">⏩</button>
               </div>
             </div>
+            <div class="row">
+              <div>
+                <label for="skipSpeed">Skip speed (no action)</label>
+                <select id="skipSpeed">
+                  <option value="24">Slow</option>
+                  <option value="48" selected>Fast</option>
+                  <option value="120">Instant</option>
+                </select>
+              </div>
+              <div>
+                <label>Replays</label>
+                <div class="row">
+                  <button id="replayToggle" class="ghost active">On</button>
+                  <button id="replayBtn" class="ghost">↺ Replay</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -202,8 +224,14 @@
           <div class="stat"><span id="stPoss0" class="sv">50%</span><span class="sl">Possession</span><span id="stPoss1" class="sv">50%</span></div>
           <div class="stat"><span id="stShots0" class="sv">0</span><span class="sl">Shots</span><span id="stShots1" class="sv">0</span></div>
           <div class="stat"><span id="stSot0" class="sv">0</span><span class="sl">On target</span><span id="stSot1" class="sv">0</span></div>
+          <div class="stat"><span id="stXg0" class="sv">0.0</span><span class="sl">xG</span><span id="stXg1" class="sv">0.0</span></div>
           <div class="stat"><span id="stPass0" class="sv">0%</span><span class="sl">Pass accuracy</span><span id="stPass1" class="sv">0%</span></div>
           <div class="stat"><span id="stFit0" class="sv">100%</span><span class="sl">Fitness</span><span id="stFit1" class="sv">100%</span></div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Player Ratings</h2>
+          <div id="ratings" class="ratings"></div>
         </div>
 
         <div class="panel" style="margin-top: 16px;">

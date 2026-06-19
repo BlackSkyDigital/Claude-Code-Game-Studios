@@ -54,6 +54,21 @@ interface Player {
   baseSpeed: number; // m/s at full fitness (from pace + acceleration)
   condition: number; // 0..1 current fitness; drops with fatigue
   decisionTimer: number; // per-player cadence between on-ball decisions
+  assistFrom: Player | null; // teammate who last fed this player (for assists)
+  stat: PlayerStat;
+}
+
+interface PlayerStat {
+  passA: number;
+  passC: number;
+  shots: number;
+  sot: number;
+  goals: number;
+  assists: number;
+  keyPasses: number;
+  tackles: number;
+  saves: number;
+  blocks: number;
 }
 
 interface Ball {
@@ -63,6 +78,7 @@ interface Ball {
   lastTeam: 0 | 1 | null; // team that last touched it (for interceptions/credit)
   shooter: Player | null; // set while a shot is in flight
   receiver: Player | null; // intended target of an in-flight pass (runs onto it)
+  passer: Player | null; // who played the in-flight pass/cross (for assists/stats)
   isShot: boolean;
   shotType: ShotType | null; // type of the in-flight shot
   passType: PassType | null; // type of the in-flight pass
@@ -80,6 +96,7 @@ export interface Snapshot {
   score: [number, number];
   shots: [number, number];
   shotsOnTarget: [number, number];
+  xg: [number, number]; // expected goals
   possession: [number, number]; // percentages, sum ~100
   passAccuracy: [number, number]; // percentages
   fitness: [number, number]; // avg team condition %, falls with fatigue
@@ -96,9 +113,14 @@ export interface Snapshot {
     x: number;
     y: number;
     number: number;
+    name: string;
+    team: 0 | 1;
+    role: Role;
     color: string;
     textColor: string;
     hasBall: boolean;
+    rating: number;
+    goals: number;
   }[];
   events: MatchEvent[];
 }
@@ -159,6 +181,7 @@ export class Match {
   score: [number, number] = [0, 0];
   shots: [number, number] = [0, 0];
   shotsOnTarget: [number, number] = [0, 0];
+  xg: [number, number] = [0, 0];
   possessionTicks: [number, number] = [0, 0];
   passesAtt: [number, number] = [0, 0];
   passesComp: [number, number] = [0, 0];
@@ -185,6 +208,7 @@ export class Match {
       lastTeam: null,
       shooter: null,
       receiver: null,
+      passer: null,
       isShot: false,
       shotType: null,
       passType: null,
@@ -226,6 +250,8 @@ export class Match {
           baseSpeed: 4.6 + ((a.pace + a.acceleration) / 2) * 0.19,
           condition: startCond,
           decisionTimer: 0,
+          assistFrom: null,
+          stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
         });
       });
     }
@@ -276,6 +302,7 @@ export class Match {
     this.ball.vel = { x: 0, y: 0 };
     this.ball.shooter = null;
     this.ball.receiver = null;
+    this.ball.passer = null;
     this.ball.isShot = false;
     this.ball.airTimer = 0;
     this.ball.passType = null;
@@ -702,8 +729,10 @@ export class Match {
     const dir = norm(sub(aim, crosser.pos));
     const speed = 15 + d * 0.35;
     this.crossCount++;
+    crosser.stat.passA++;
     b.owner = null;
     b.shooter = null;
+    b.passer = crosser;
     b.receiver = null; // contested in the box, not gifted to the target
     b.isShot = false;
     b.passType = "lofted";
@@ -783,8 +812,10 @@ export class Match {
 
     this.passesAtt[passer.team]++;
     this.passTypeCounts[type]++;
+    passer.stat.passA++;
     b.owner = null;
     b.shooter = null;
+    b.passer = passer;
     b.receiver = target; // the receiver moves to meet/run onto it
     b.isShot = false;
     b.passType = type;
@@ -832,9 +863,20 @@ export class Match {
     const aimY = CENTER.y + this.rng.gauss(0, spread);
     const dir = norm(sub({ x: goal.x, y: aimY }, shooter.pos));
 
+    // expected goals for this attempt: closer + more central = higher; headers
+    // and chips are harder to convert
+    const ang = 1 - Math.min(1, Math.abs(shooter.pos.y - 34) / (dGoal + 7));
+    let xg = Math.max(0.015, 0.22 * Math.exp(-dGoal / 6.5)) * (0.35 + 0.65 * ang);
+    if (type === "header") xg *= 0.65;
+    else if (type === "chip") xg *= 0.8;
+    else if (type === "power") xg *= 0.9;
+    this.xg[shooter.team] += Math.min(0.9, xg);
+    shooter.stat.shots++;
+
     this.ball.owner = null;
     this.ball.shooter = shooter;
     this.ball.receiver = null;
+    this.ball.passer = null;
     this.ball.isShot = true;
     this.ball.shotType = type;
     this.ball.fromCross = false;
@@ -865,6 +907,7 @@ export class Match {
     this.ball.vel = { x: 0, y: 0 };
     this.ball.shooter = null;
     this.ball.receiver = null;
+    this.ball.passer = null;
     this.ball.isShot = false;
     this.ball.airTimer = 0;
     this.ball.passType = null;
@@ -872,6 +915,8 @@ export class Match {
     this.ball.fromCross = false;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
+    // only a fraction of micro-duels count as a "tackle won" for the stat sheet
+    if (kind === "tackle" && this.crng.chance(0.12)) winner.stat.tackles++;
     // narrate only some final-third turnovers, so commentary stays readable
     if (inFinalThird && this.crng.chance(0.3)) {
       this.emit(
@@ -930,6 +975,7 @@ export class Match {
     b.pos = { ...p.pos };
     b.shooter = null;
     b.receiver = null;
+    b.passer = null;
     b.isShot = false;
     b.shotType = null;
     b.passType = null;
@@ -976,6 +1022,8 @@ export class Match {
           }
           if (this.rng.chance(saveProb)) {
             this.shotsOnTarget[shooter.team]++; // on target and saved
+            shooter.stat.sot++;
+            gk.stat.saves++;
             this.claim(gk);
             this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
           }
@@ -1029,6 +1077,7 @@ export class Match {
     // (2) An outfield defender may block a shot with their body
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
       if (this.rng.chance(0.18)) {
+        claimant.stat.blocks++;
         this.claim(claimant);
         this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
       }
@@ -1046,8 +1095,18 @@ export class Match {
     if (b.lastTeam !== null && b.lastTeam !== claimant.team) controlProb *= 0.55;
     if (!this.rng.chance(controlProb)) return;
     const completedPass = b.lastTeam === claimant.team;
+    const passer = b.passer;
+    const wasKey = b.passType === "through" || b.fromCross;
     this.claim(claimant);
-    if (completedPass) this.passesComp[claimant.team]++;
+    if (completedPass) {
+      this.passesComp[claimant.team]++;
+      if (passer && passer !== claimant) {
+        passer.stat.passC++;
+        claimant.assistFrom = passer; // remember who fed me (for assists)
+        // a key pass = a through ball / cross that finds a teammate in the final third
+        if (wasKey && this.inFinalThird(claimant)) passer.stat.keyPasses++;
+      }
+    }
     if (fromOpponent && this.inFinalThird(claimant)) {
       this.emit(
         "interception",
@@ -1126,7 +1185,14 @@ export class Match {
   private scoreGoal(team: 0 | 1): void {
     this.score[team]++;
     this.shotsOnTarget[team]++; // a goal is, by definition, on target
-    const scorer = this.ball.shooter?.name ?? "Unknown";
+    const shooter = this.ball.shooter;
+    const scorer = shooter?.name ?? "Unknown";
+    if (shooter) {
+      shooter.stat.goals++;
+      shooter.stat.sot++;
+      const assister = shooter.assistFrom;
+      if (assister && assister.team === team && assister !== shooter) assister.stat.assists++;
+    }
     this.emit("goal", team, scorer, this.vary([`GOAL! ${scorer} scores for ${this.shortName(team)}!`, `${scorer} finds the net — GOAL for ${this.shortName(team)}!`, `It's there! ${scorer} scores!`, `GOAL!! ${scorer} makes it count for ${this.shortName(team)}!`]));
     this.kickoff((1 - team) as 0 | 1, false);
   }
@@ -1200,6 +1266,7 @@ export class Match {
       score: [...this.score] as [number, number],
       shots: [...this.shots] as [number, number],
       shotsOnTarget: [...this.shotsOnTarget] as [number, number],
+      xg: [Math.round(this.xg[0] * 10) / 10, Math.round(this.xg[1] * 10) / 10],
       possession: [poss0, 100 - poss0],
       passAccuracy: [pa(0), pa(1)],
       fitness: [fit(0), fit(1)],
@@ -1221,11 +1288,32 @@ export class Match {
         x: p.pos.x,
         y: p.pos.y,
         number: p.number,
+        name: p.name,
+        team: p.team,
+        role: p.role,
         color: p.color,
         textColor: p.textColor,
         hasBall: p === this.ball.owner,
+        rating: this.playerRating(p),
+        goals: p.stat.goals,
       })),
       events: this.events,
     };
+  }
+
+  /** Live player rating, 4.5–10, FM-style from contributions. */
+  private playerRating(p: Player): number {
+    const s = p.stat;
+    let r = 6.2;
+    if (p.role === "GK") {
+      const conceded = this.score[1 - p.team];
+      r = 6.6 + s.saves * 0.18 - conceded * 0.35;
+    } else {
+      r +=
+        s.goals * 0.9 + s.assists * 0.5 + s.sot * 0.08 + s.keyPasses * 0.12 +
+        s.tackles * 0.05 + s.blocks * 0.1;
+      if (s.passA >= 8) r += (s.passC / s.passA - 0.78) * 0.8;
+    }
+    return Math.max(4.5, Math.min(10, Math.round(r * 10) / 10));
   }
 }

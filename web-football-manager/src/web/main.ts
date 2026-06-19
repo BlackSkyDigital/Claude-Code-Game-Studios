@@ -44,6 +44,11 @@ const conditionsLine = $("conditions");
 const commNow = $("commNow");
 const commPrev = $("commPrev");
 const hlSel = $<HTMLSelectElement>("hlMode");
+const skipSel = $<HTMLSelectElement>("skipSpeed");
+const replayToggleBtn = $<HTMLButtonElement>("replayToggle");
+const replayBtn = $<HTMLButtonElement>("replayBtn");
+const stXg = [$("stXg0"), $("stXg1")] as const;
+const ratingsBox = $("ratings");
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -102,7 +107,16 @@ const near = (a: number, b: number): boolean => Math.abs(a - b) < 5; // <5m = re
 // fast-forwards the dull bits and plays the chosen highlights at watch speed.
 let highlightMode = "comprehensive";
 let hiHold = 0; // seconds of "keep showing this passage" remaining
-const FF_SPEED = 48; // sim-seconds per real-second while skipping
+let skipSpeed = 48; // sim-seconds per real-second while skipping (separate control)
+
+// ---- replays: a rolling buffer of recent snapshots we can re-play ----
+const buffer: Snapshot[] = [];
+const BUFFER_MAX = 90; // ~9s at 0.1s
+let replaysOn = true;
+let replayClip: Snapshot[] | null = null;
+let replayPos = 0; // float index into the clip
+let pendingReplay = false; // a goal just asked for an auto-replay
+let lastRatingsUpdate = 0;
 
 // how long a highlight lingers after a given event, by mode
 function holdFor(type: string): number {
@@ -173,6 +187,9 @@ function newMatch(): void {
   flash = null;
   acc = 0;
   hiHold = 0;
+  buffer.length = 0;
+  replayClip = null;
+  pendingReplay = false;
   playing = true;
   playBtn.textContent = "Pause";
   nameHome.textContent = h.short;
@@ -289,26 +306,21 @@ function drawFlash(): void {
   ctx.globalAlpha = 1;
 }
 
-/** Interpolated render between prevSnap and currSnap for smooth motion. */
-function render(): void {
-  if (!currSnap) return;
-  const cur = currSnap;
-  const prev = prevSnap ?? cur;
-
+/** Draw the pitch + players + ball, interpolated between two snapshots. */
+function drawScene(cur: Snapshot, prev: Snapshot, a: number, replay = false): void {
   drawPitch();
   drawTrail();
 
   for (let i = 0; i < cur.players.length; i++) {
     const cp = cur.players[i]!;
     const pp = prev.players[i] ?? cp;
-    const x = near(pp.x, cp.x) ? lerp(pp.x, cp.x, alpha) : cp.x;
-    const y = near(pp.y, cp.y) ? lerp(pp.y, cp.y, alpha) : cp.y;
+    const x = near(pp.x, cp.x) ? lerp(pp.x, cp.x, a) : cp.x;
+    const y = near(pp.y, cp.y) ? lerp(pp.y, cp.y, a) : cp.y;
     drawPlayer(X(x), Y(y), cp);
   }
 
-  // interpolated ball + trail point
-  const bx = near(prev.ball.x, cur.ball.x) ? lerp(prev.ball.x, cur.ball.x, alpha) : cur.ball.x;
-  const by = near(prev.ball.y, cur.ball.y) ? lerp(prev.ball.y, cur.ball.y, alpha) : cur.ball.y;
+  const bx = near(prev.ball.x, cur.ball.x) ? lerp(prev.ball.x, cur.ball.x, a) : cur.ball.x;
+  const by = near(prev.ball.y, cur.ball.y) ? lerp(prev.ball.y, cur.ball.y, a) : cur.ball.y;
   const px = X(bx);
   const py = Y(by);
   trail.push({ x: px, y: py, mode: cur.ballMode });
@@ -327,7 +339,6 @@ function render(): void {
   ctx.strokeStyle = "#000";
   ctx.stroke();
 
-  // action label (top-left of pitch) so you can tell what's happening
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = MODE_COLOR[cur.ballMode] ?? "#fff";
   ctx.font = "bold 12px system-ui, sans-serif";
@@ -336,8 +347,88 @@ function render(): void {
   ctx.fillText(MODE_LABEL[cur.ballMode] ?? "", M + 6, M + 6);
   ctx.globalAlpha = 1;
 
+  if (replay) {
+    ctx.fillStyle = "rgba(255,90,90,0.9)";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText("🔁 REPLAY", canvas.width / 2, M + 6);
+  }
+
+  drawTimeline(cur);
+}
+
+/** A thin 0–90' incident strip along the bottom with markers. */
+function drawTimeline(snap: Snapshot): void {
+  const y = canvas.height - M + 8;
+  const x0 = M;
+  const w = canvas.width - 2 * M;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x0, y);
+  ctx.lineTo(x0 + w, y);
+  ctx.stroke();
+  // progress
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  ctx.beginPath();
+  ctx.moveTo(x0, y);
+  ctx.lineTo(x0 + w * Math.min(1, snap.minute / 90), y);
+  ctx.stroke();
+  const MARK: Record<string, string> = {
+    goal: "#7ef08a", save: "#7ec8ff", block: "#ff8e8e", shot_off: "#ffce5a", shot: "#ffd36a",
+  };
+  for (const e of snap.events) {
+    const c = MARK[e.type];
+    if (!c) continue;
+    const ex = x0 + w * Math.min(1, e.minute / 90);
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    ctx.arc(ex, y, e.type === "goal" ? 4 : 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawReport(snap: Snapshot): void {
+  ctx.fillStyle = "rgba(8,12,18,0.86)";
+  ctx.fillRect(M + 30, M + 24, canvas.width - 2 * M - 60, canvas.height - 2 * M - 70);
+  const cx = canvas.width / 2;
+  let yy = M + 60;
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f0f6fc";
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.fillText(`FULL TIME  ${snap.homeShort} ${snap.score[0]} – ${snap.score[1]} ${snap.awayShort}`, cx, yy);
+  yy += 30;
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillStyle = "#8b949e";
+  ctx.fillText(`Poss ${snap.possession[0]}-${snap.possession[1]}%   ·   Shots ${snap.shots[0]}-${snap.shots[1]}   ·   xG ${snap.xg[0]}-${snap.xg[1]}`, cx, yy);
+  yy += 28;
+  // top scorers
+  const scorers = snap.players.filter((p) => p.goals > 0).sort((a, b) => b.goals - a.goals);
+  ctx.fillStyle = "#9af2a6";
+  ctx.font = "13px system-ui, sans-serif";
+  for (const s of scorers.slice(0, 6)) {
+    ctx.fillText(`⚽ ${s.name}${s.goals > 1 ? " ×" + s.goals : ""} (${s.team === 0 ? snap.homeShort : snap.awayShort})`, cx, yy);
+    yy += 19;
+  }
+  yy += 8;
+  // top ratings each side
+  ctx.fillStyle = "#cfd8e3";
+  const top = (t: 0 | 1) =>
+    snap.players.filter((p) => p.team === t).sort((a, b) => b.rating - a.rating)[0];
+  const mh = top(0);
+  const ma = top(1);
+  if (mh) ctx.fillText(`★ ${snap.homeShort}: ${mh.name} ${mh.rating.toFixed(1)}`, cx - 110, yy);
+  if (ma) ctx.fillText(`★ ${snap.awayShort}: ${ma.name} ${ma.rating.toFixed(1)}`, cx + 110, yy);
+}
+
+/** Interpolated render of the live match. */
+function render(): void {
+  if (!currSnap) return;
+  drawScene(currSnap, prevSnap ?? currSnap, alpha);
   drawFlash();
-  updateHUD(cur);
+  updateHUD(currSnap);
+  if (currSnap.finished) drawReport(currSnap);
 }
 
 function updateHUD(snap: Snapshot): void {
@@ -350,12 +441,49 @@ function updateHUD(snap: Snapshot): void {
     stPoss[i].textContent = `${snap.possession[i]}%`;
     stShots[i].textContent = String(snap.shots[i]);
     stSot[i].textContent = String(snap.shotsOnTarget[i]);
+    stXg[i].textContent = snap.xg[i].toFixed(1);
     stPass[i].textContent = `${snap.passAccuracy[i]}%`;
     stFit[i].textContent = `${snap.fitness[i]}%`;
+  }
+  // ratings panel (throttled — rebuilding DOM is comparatively expensive)
+  const now = performance.now();
+  if (now - lastRatingsUpdate > 700) {
+    lastRatingsUpdate = now;
+    updateRatings(snap);
   }
   conditionsLine.textContent =
     `${styleLabel(snap.homeStyle as TacticalStyle)}  ·  ${weatherLabel(snap.weather as Weather)}  ·  ` +
     `${styleLabel(snap.awayStyle as TacticalStyle)}`;
+}
+
+const ROLE_ORDER: Record<string, number> = {
+  GK: 0, DR: 1, DC: 2, DL: 3, DM: 4, MC: 5, MR: 6, ML: 7, AM: 8, ST: 9,
+};
+function ratingColor(r: number): string {
+  return r >= 7.5 ? "#3fb950" : r >= 6.5 ? "#8b949e" : "#d29922";
+}
+function rrow(p: Snapshot["players"][number] | undefined): string {
+  if (!p) return "<div></div>";
+  const c = ratingColor(p.rating);
+  return `<div class="rrow"><span class="rnum">${p.number}</span><span class="rname">${p.name}${p.goals ? " ⚽" : ""}</span><span class="rval" style="background:${c}22;color:${c}">${p.rating.toFixed(1)}</span></div>`;
+}
+function updateRatings(snap: Snapshot): void {
+  const home = snap.players
+    .filter((p) => p.team === 0)
+    .sort((a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9));
+  const away = snap.players
+    .filter((p) => p.team === 1)
+    .sort((a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9));
+  let html = "";
+  for (let i = 0; i < 11; i++) html += rrow(home[i]) + rrow(away[i]);
+  ratingsBox.innerHTML = html;
+}
+
+function startReplay(): void {
+  if (buffer.length < 8) return;
+  replayClip = buffer.slice();
+  replayPos = 0;
+  trail.length = 0;
 }
 
 const FLASH: Record<string, { text: string; color: string }> = {
@@ -383,6 +511,7 @@ function processEvents(snap: Snapshot): void {
     const f = FLASH[e.type];
     if (f) flash = { text: f.text, color: f.color, until: performance.now() + 1300 };
     hiHold = Math.max(hiHold, holdFor(e.type)); // a notable event starts/extends a highlight
+    if (e.type === "goal" && replaysOn) pendingReplay = true; // auto-replay goals
   }
   lastEventCount = snap.events.length;
 }
@@ -419,18 +548,41 @@ function tick(now: number): void {
   const dtReal = lastFrame ? (now - lastFrame) / 1000 : 0;
   lastFrame = now;
 
+  // A replay takes over the view and pauses the live sim while it plays.
+  if (replayClip) {
+    replayPos += (Math.min(dtReal, 0.1) * timeScale) / STEP;
+    const last = replayClip.length - 1;
+    if (replayPos >= last) {
+      replayClip = null;
+      trail.length = 0;
+    } else {
+      const i = Math.floor(replayPos);
+      drawScene(replayClip[i]!, replayClip[Math.max(0, i - 1)]!, replayPos - i, true);
+      if (currSnap) updateHUD(currSnap);
+      return;
+    }
+  }
+
   if (match && playing && !match.finished) {
     const ff = isFastForward();
-    acc += Math.min(dtReal, 0.1) * (ff ? FF_SPEED : timeScale);
+    acc += Math.min(dtReal, 0.1) * (ff ? skipSpeed : timeScale);
     let safety = 0;
-    while (acc >= STEP && !match.finished && safety < 800) {
+    while (acc >= STEP && !match.finished && safety < 1200) {
       match.step();
       prevSnap = currSnap;
       currSnap = match.snapshot();
-      processEvents(currSnap); // may bump hiHold (a chance/goal)
+      buffer.push(currSnap);
+      if (buffer.length > BUFFER_MAX) buffer.shift();
+      processEvents(currSnap); // may bump hiHold / set pendingReplay
       hiHold = Math.max(hiHold - STEP, ballHold(currSnap));
       acc -= STEP;
       safety++;
+      if (pendingReplay) {
+        pendingReplay = false;
+        startReplay();
+        acc = 0;
+        break;
+      }
       // if we were skipping and a highlight just began, stop here and play it
       if (ff && highlightMode !== "commentary" && hiHold > 0) {
         acc = 0;
@@ -441,6 +593,13 @@ function tick(now: number): void {
       playing = false;
       playBtn.textContent = "Play";
     }
+  }
+
+  if (replayClip) {
+    // a goal just triggered an auto-replay this frame
+    drawScene(replayClip[0]!, replayClip[0]!, 0, true);
+    if (currSnap) updateHUD(currSnap);
+    return;
   }
 
   const ffNow = isFastForward();
@@ -474,6 +633,17 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) 
 hlSel.addEventListener("change", () => {
   highlightMode = hlSel.value;
   hiHold = 0;
+});
+skipSel.addEventListener("change", () => {
+  skipSpeed = Number(skipSel.value);
+});
+replayToggleBtn.addEventListener("click", () => {
+  replaysOn = !replaysOn;
+  replayToggleBtn.textContent = replaysOn ? "On" : "Off";
+  replayToggleBtn.classList.toggle("active", replaysOn);
+});
+replayBtn.addEventListener("click", () => {
+  if (!replayClip) startReplay();
 });
 
 fillTeamSelects();

@@ -137,8 +137,14 @@ web-football-manager/
       contested **aerial duels** (Heading/Jumping/Bravery vs Marking) → **headers**;
       fixed attacks dying at the byline with no shot. Crosses ~18/match, headers
       ~25% of shots, all skill-driven.
-- [ ] **Increment 3** — dribbling/1v1 take-ons, first-touch-under-pressure,
-      off-ball intelligence, player traits, set pieces (review doc phases C–G)
+- [x] **Increment 2.7** — broadcast match-day UX: FM-style **highlight modes**
+      (full → goals → commentary), separate **highlight speed** and **skip
+      speed**, **replays** (auto goal replays + manual, via a snapshot buffer),
+      a **live commentary bar**, **incident timeline**, **xG**, **per-player
+      ratings**, and a **full-time report**. See `docs/FM-MATCHDAY-UX.md`.
+- [ ] **Increment 3** — in-match management (live tactics/mentality, subs,
+      touchline shouts) + dribbling/1v1 take-ons, first-touch-under-pressure,
+      off-ball intelligence, player traits, set pieces (review docs)
 - [ ] **Increment 4** — league/season model: fixtures, table, AI-managed clubs
 - [ ] **Increment 5** — management screens (squad, transfers) over a real dataset
 - [ ] **Increment 6** — Node + WebSocket backend, Postgres save, **async
