@@ -25,6 +25,10 @@ const scoreAway = $("scoreAway");
 const shotsLine = $("shots");
 const clockEl = $("clock");
 const feed = $("feed");
+const stPoss = [$("stPoss0"), $("stPoss1")] as const;
+const stShots = [$("stShots0"), $("stShots1")] as const;
+const stSot = [$("stSot0"), $("stSot1")] as const;
+const stPass = [$("stPass0"), $("stPass1")] as const;
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -36,8 +40,11 @@ const Y = (y: number) => M + y * sy;
 // ---- state ----
 let match: Match | null = null;
 let playing = false;
-let speed = 6; // simulation steps per animation frame
+let timeScale = 8; // SIMULATED seconds per REAL second (frame-rate independent)
+let lastFrame = 0;
+let acc = 0; // leftover simulated time not yet stepped
 let lastEventCount = 0;
+const STEP = 0.1; // must match the engine's internal DT
 
 function fillTeamSelects(): void {
   for (const sel of [homeSel, awaySel]) {
@@ -165,6 +172,14 @@ function draw(snap: Snapshot): void {
   const mm = String(Math.floor(snap.minute)).padStart(2, "0");
   clockEl.textContent = snap.finished ? "FT" : `${mm}'`;
 
+  // match stats
+  for (const i of [0, 1] as const) {
+    stPoss[i].textContent = `${snap.possession[i]}%`;
+    stShots[i].textContent = String(snap.shots[i]);
+    stSot[i].textContent = String(snap.shotsOnTarget[i]);
+    stPass[i].textContent = `${snap.passAccuracy[i]}%`;
+  }
+
   // commentary (append only new events)
   if (snap.events.length > lastEventCount) {
     const shown = new Set([
@@ -190,16 +205,26 @@ function draw(snap: Snapshot): void {
 }
 
 // ---- loop ----
-function tick(): void {
-  if (match && playing && !match.finished) {
-    for (let i = 0; i < speed; i++) match.step();
-    draw(match.snapshot());
-    if (match.finished) {
-      playing = false;
-      playBtn.textContent = "Play";
-    }
-  }
+// Fixed-timestep playback: real elapsed time drives how many 0.1s sim steps we
+// run, so the match plays at the same pace on any device regardless of frame
+// rate (a 120Hz phone no longer runs it at double speed).
+function tick(now: number): void {
   requestAnimationFrame(tick);
+  const dtReal = lastFrame ? (now - lastFrame) / 1000 : 0;
+  lastFrame = now;
+  if (!match || !playing || match.finished) return;
+
+  acc += Math.min(dtReal, 0.1) * timeScale; // clamp to avoid jumps after pauses
+  let steps = Math.floor(acc / STEP);
+  acc -= steps * STEP;
+  steps = Math.min(steps, 60); // safety cap
+  for (let i = 0; i < steps && !match.finished; i++) match.step();
+
+  draw(match.snapshot());
+  if (match.finished) {
+    playing = false;
+    playBtn.textContent = "Play";
+  }
 }
 
 // ---- wiring ----
@@ -215,7 +240,7 @@ playBtn.addEventListener("click", () => {
 });
 for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) {
   btn.addEventListener("click", () => {
-    speed = Number(btn.dataset.speed);
+    timeScale = Number(btn.dataset.speed);
     for (const b of document.querySelectorAll("[data-speed]"))
       b.classList.toggle("active", b === btn);
   });
@@ -223,4 +248,4 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) 
 
 fillTeamSelects();
 newMatch();
-tick();
+requestAnimationFrame(tick);

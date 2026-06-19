@@ -50,6 +50,9 @@ export interface Snapshot {
   minute: number;
   score: [number, number];
   shots: [number, number];
+  shotsOnTarget: [number, number];
+  possession: [number, number]; // percentages, sum ~100
+  passAccuracy: [number, number]; // percentages
   finished: boolean;
   homeShort: string;
   awayShort: string;
@@ -85,6 +88,9 @@ function clampPitch(v: Vec): Vec {
     y: Math.max(0, Math.min(PITCH_WIDTH, v.y)),
   };
 }
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
 /** Distance from point p to the segment a->b (used for interceptions). */
 function segDist(p: Vec, a: Vec, b: Vec): number {
   const abx = b.x - a.x;
@@ -108,6 +114,10 @@ export class Match {
   time = 0;
   score: [number, number] = [0, 0];
   shots: [number, number] = [0, 0];
+  shotsOnTarget: [number, number] = [0, 0];
+  possessionTicks: [number, number] = [0, 0];
+  passesAtt: [number, number] = [0, 0];
+  passesComp: [number, number] = [0, 0];
   events: MatchEvent[] = [];
   finished = false;
 
@@ -185,6 +195,7 @@ export class Match {
     if (this.finished) return;
     this.time += DT;
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
+    if (this.ball.owner) this.possessionTicks[this.ball.owner.team]++;
 
     if (!this.startedSecondHalf && this.time >= HALF_SECONDS) {
       this.startedSecondHalf = true;
@@ -222,12 +233,12 @@ export class Match {
   private nearestOutfield(
     team: 0 | 1,
     point: Vec,
-    exclude?: Player,
+    exclude: Player[] = [],
   ): Player | null {
     let best: Player | null = null;
     let bd = Infinity;
     for (const p of this.players) {
-      if (p.team !== team || p.role === "GK" || p === exclude) continue;
+      if (p.team !== team || p.role === "GK" || exclude.includes(p)) continue;
       const d = dist(p.pos, point);
       if (d < bd) {
         bd = d;
@@ -256,44 +267,92 @@ export class Match {
     for (const p of this.players) {
       if (p === b.owner) {
         const g = this.oppGoal(p.team);
-        p.target = clampPitch({
-          x: p.pos.x + norm(sub(g, p.pos)).x * 10,
-          y: p.pos.y + norm(sub(g, p.pos)).y * 10,
-        });
+        const d = norm(sub(g, p.pos));
+        p.target = clampPitch({ x: p.pos.x + d.x * 10, y: p.pos.y + d.y * 10 });
         continue;
       }
       if (p.role === "GK") {
         p.target = this.gkTarget(p);
         continue;
       }
-      const pull = p.team === possTeam ? 0.55 : 0.4;
+      const attacking = p.team === possTeam;
+      // Ball-relative push so attacks actually build. Forwards surge much more
+      // than defenders, so the side STRETCHES as it attacks rather than moving
+      // as one rigid block. Relative to base + clamp => can't collapse on goal.
+      const fwd =
+        p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
+      const def = p.role === "DC" || p.role === "DL" || p.role === "DR";
+      const line = fwd ? 1.25 : def ? 0.8 : 1.05;
+      const pull = (attacking ? 0.58 : 0.42) * line;
+      // slow, per-player drift so players drift into space individually
+      const drift = Math.sin(this.time * 0.45 + p.id * 1.7) * 3;
+      const tx = p.base.x + (b.pos.x - CENTER.x) * pull;
+      const ty = p.base.y + (b.pos.y - CENTER.y) * 0.2 + drift;
       p.target = clampPitch({
-        x: p.base.x + (b.pos.x - CENTER.x) * pull,
-        y: p.base.y + (b.pos.y - CENTER.y) * 0.3,
+        // outfielders never retreat onto their own goal line
+        x: p.team === 0 ? clamp(tx, 6, PITCH_LENGTH) : clamp(tx, 0, PITCH_LENGTH - 6),
+        y: ty,
       });
     }
 
     if (possTeam !== null && b.owner) {
-      // closest defender presses the ball
-      const presser = this.nearestOutfield(
-        (1 - possTeam) as 0 | 1,
-        b.pos,
-      );
-      if (presser) presser.target = { ...b.pos };
-      // a teammate offers a forward passing option
+      // the closest opponent closes down the ball; a second one holds off,
+      // shadowing rather than diving in (avoids constant double-team turnovers)
+      const d1 = this.nearestOutfield((1 - possTeam) as 0 | 1, b.pos);
+      if (d1) d1.target = { ...b.pos };
+      const d2 = this.nearestOutfield((1 - possTeam) as 0 | 1, b.pos, d1 ? [d1] : []);
+      if (d2) {
+        // hold ~5m off the ball, between it and goal
+        const off = norm(sub(d2.pos, b.pos));
+        d2.target = clampPitch({ x: b.pos.x + off.x * 5, y: b.pos.y + off.y * 5 });
+      }
+      // Support play: the nearest teammates take up angles around the carrier
+      // to form passing triangles (two ahead in the half-spaces, one behind to
+      // recycle) — this is what lets possession progress through the thirds.
       const goal = this.oppGoal(possTeam);
-      const ahead: Vec = {
-        x: b.owner.pos.x + norm(sub(goal, b.owner.pos)).x * 16,
-        y: b.owner.pos.y < CENTER.y ? b.owner.pos.y + 10 : b.owner.pos.y - 10,
-      };
-      const support = this.nearestOutfield(possTeam, ahead, b.owner);
-      if (support) support.target = clampPitch(ahead);
+      const f = norm(sub(goal, b.owner.pos)); // forward, toward goal
+      const rt: Vec = { x: f.y, y: -f.x }; // perpendicular (to the side)
+      const slots: Vec[] = [
+        { x: b.owner.pos.x + f.x * 16 + rt.x * 11, y: b.owner.pos.y + f.y * 16 + rt.y * 11 },
+        { x: b.owner.pos.x + f.x * 16 - rt.x * 11, y: b.owner.pos.y + f.y * 16 - rt.y * 11 },
+        { x: b.owner.pos.x - f.x * 9 + rt.x * 7, y: b.owner.pos.y - f.y * 9 + rt.y * 7 },
+      ];
+      const taken: Player[] = [b.owner];
+      for (const slot of slots) {
+        const sp = this.nearestOutfield(possTeam, slot, taken);
+        if (sp) {
+          sp.target = clampPitch(slot);
+          taken.push(sp);
+        }
+      }
     } else {
       // loose ball: nearest of each side chases it
       const a = this.nearestOutfield(0, b.pos);
       const c = this.nearestOutfield(1, b.pos);
       if (a) a.target = { ...b.pos };
       if (c) c.target = { ...b.pos };
+    }
+
+    // Separation: nudge every outfield player away from nearby teammates so the
+    // side keeps its spacing and moves as individuals, not one rigid block.
+    for (const p of this.players) {
+      if (p === b.owner || p.role === "GK") continue;
+      let sx = 0;
+      let sy = 0;
+      for (const q of this.players) {
+        if (q === p || q.team !== p.team) continue;
+        const dx = p.pos.x - q.pos.x;
+        const dy = p.pos.y - q.pos.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.001 && d < 8) {
+          const w = (8 - d) / 8;
+          sx += (dx / d) * w;
+          sy += (dy / d) * w;
+        }
+      }
+      if (sx !== 0 || sy !== 0) {
+        p.target = clampPitch({ x: p.target.x + sx * 2.5, y: p.target.y + sy * 2.5 });
+      }
     }
   }
 
@@ -332,10 +391,10 @@ export class Match {
       return;
     }
 
-    // shoot — only from sensible range, and rarely
-    if (dGoal < 20) {
-      let shotProb = (owner.attrs.shooting / 20) * Math.max(0, 1 - dGoal / 22) * 0.08;
-      if (pressure < 3) shotProb *= 0.5;
+    // shoot — readily when in range, a little less when crowded out
+    if (dGoal < 22) {
+      let shotProb = (owner.attrs.shooting / 20) * Math.max(0, 1 - dGoal / 24) * 0.12;
+      if (pressure < 3) shotProb *= 0.7;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner);
         return;
@@ -383,6 +442,7 @@ export class Match {
     };
     const dir = norm(sub(aim, passer.pos));
     const speed = Math.min(24, 13 + d * 0.45);
+    this.passesAtt[passer.team]++;
     this.ball.owner = null;
     this.ball.shooter = null;
     this.ball.isShot = false;
@@ -501,20 +561,22 @@ export class Match {
     if (!claimant) return;
 
     const fromOpponent = b.lastTeam !== null && b.lastTeam !== claimant.team;
-    const isOppShot = b.isShot && b.shooter != null && b.shooter.team !== claimant.team;
 
-    if (isOppShot) {
+    if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
+      const shooter = b.shooter; // narrowed to Player for the rest of this block
       if (claimant.role === "GK") {
         if (b.judged) return; // already beaten this shot
         const onTarget = b.pos.y > GOAL_Y_MIN - 0.3 && b.pos.y < GOAL_Y_MAX + 0.3;
         if (!onTarget) return; // wide — let it run out for a goal kick
         b.judged = true;
+        const shooterTeam = shooter.team;
         const corner = Math.min(1, Math.abs(b.pos.y - 34) / 3.66);
         const saveProb = Math.max(
           0.2,
           Math.min(0.95, (0.62 + claimant.attrs.control / 40) * (1 - 0.3 * corner)),
         );
-        if (!this.rng.chance(saveProb)) return; // beaten — ball runs into the net
+        if (!this.rng.chance(saveProb)) return; // beaten — counted as a goal later
+        this.shotsOnTarget[shooterTeam]++; // on target and saved
         this.claim(claimant);
         this.emit("save", claimant.team, claimant.name, `${claimant.name} saves it!`);
         return;
@@ -531,7 +593,9 @@ export class Match {
     // open-play loose ball (pass, clearance, deflection)
     const controlProb = 0.55 + claimant.attrs.control / 50;
     if (!this.rng.chance(controlProb)) return;
+    const completedPass = b.lastTeam === claimant.team;
     this.claim(claimant);
+    if (completedPass) this.passesComp[claimant.team]++;
     if (fromOpponent && this.inFinalThird(claimant)) {
       this.emit(
         "interception",
@@ -609,6 +673,7 @@ export class Match {
 
   private scoreGoal(team: 0 | 1): void {
     this.score[team]++;
+    this.shotsOnTarget[team]++; // a goal is, by definition, on target
     const scorer = this.ball.shooter?.name ?? "Unknown";
     this.emit("goal", team, scorer, `GOAL! ${scorer} scores for ${this.shortName(team)}!`);
     this.kickoff((1 - team) as 0 | 1, false);
@@ -636,11 +701,20 @@ export class Match {
   // ---- rendering ----
 
   snapshot(): Snapshot {
+    const totPoss = this.possessionTicks[0] + this.possessionTicks[1] || 1;
+    const poss0 = Math.round((this.possessionTicks[0] / totPoss) * 100);
+    const pa = (i: 0 | 1): number =>
+      this.passesAtt[i] === 0
+        ? 0
+        : Math.round((this.passesComp[i] / this.passesAtt[i]) * 100);
     return {
       time: this.time,
       minute: Math.min(90, Math.floor(this.time / 60)),
       score: [...this.score] as [number, number],
       shots: [...this.shots] as [number, number],
+      shotsOnTarget: [...this.shotsOnTarget] as [number, number],
+      possession: [poss0, 100 - poss0],
+      passAccuracy: [pa(0), pa(1)],
       finished: this.finished,
       homeShort: this.home.short,
       awayShort: this.away.short,

@@ -85,7 +85,13 @@
       .speeds { display: flex; gap: 6px; }
       .speeds button { flex: 1; }
 
-      #feed { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+      .stat { display: flex; align-items: center; justify-content: space-between;
+        font-size: 13px; padding: 5px 2px; border-bottom: 1px solid var(--line); }
+      .stat:last-child { border-bottom: none; }
+      .stat .sv { font-weight: 700; font-variant-numeric: tabular-nums; width: 48px; }
+      .stat .sv:last-child { text-align: right; }
+      .stat .sl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+      #feed { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
       .ev { font-size: 12px; padding: 5px 8px; border-radius: 5px; background: #0d1117;
         border-left: 3px solid var(--line); }
       .ev-goal { border-left-color: #5dd56a; font-weight: 700; color: #9af2a6; }
@@ -136,13 +142,21 @@
             <div>
               <label>Speed</label>
               <div class="speeds">
-                <button class="ghost" data-speed="3">1×</button>
-                <button class="ghost active" data-speed="6">2×</button>
-                <button class="ghost" data-speed="12">4×</button>
-                <button class="ghost" data-speed="30">⏩</button>
+                <button class="ghost" data-speed="4">Slow</button>
+                <button class="ghost active" data-speed="8">Normal</button>
+                <button class="ghost" data-speed="20">Fast</button>
+                <button class="ghost" data-speed="100">⏩</button>
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Match Stats</h2>
+          <div class="stat"><span id="stPoss0" class="sv">50%</span><span class="sl">Possession</span><span id="stPoss1" class="sv">50%</span></div>
+          <div class="stat"><span id="stShots0" class="sv">0</span><span class="sl">Shots</span><span id="stShots1" class="sv">0</span></div>
+          <div class="stat"><span id="stSot0" class="sv">0</span><span class="sl">On target</span><span id="stSot1" class="sv">0</span></div>
+          <div class="stat"><span id="stPass0" class="sv">0%</span><span class="sl">Pass accuracy</span><span id="stPass1" class="sv">0%</span></div>
         </div>
 
         <div class="panel" style="margin-top: 16px;">
