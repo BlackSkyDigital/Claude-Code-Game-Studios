@@ -41,6 +41,8 @@ const homeStyleSel = $<HTMLSelectElement>("homeStyle");
 const awayStyleSel = $<HTMLSelectElement>("awayStyle");
 const weatherSel = $<HTMLSelectElement>("weatherSel");
 const conditionsLine = $("conditions");
+const commNow = $("commNow");
+const commPrev = $("commPrev");
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -133,6 +135,8 @@ function newMatch(): void {
   });
   lastEventCount = 0;
   feed.innerHTML = "";
+  commNow.textContent = "Kick-off!";
+  commPrev.textContent = "";
   trail.length = 0;
   flash = null;
   acc = 0;
@@ -324,22 +328,25 @@ function updateHUD(snap: Snapshot): void {
 const FLASH: Record<string, { text: string; color: string }> = {
   goal: { text: "⚽  GOAL!", color: "#7ef08a" },
   save: { text: "🧤  SAVED!", color: "#7ec8ff" },
+  block: { text: "🛡  BLOCKED!", color: "#ff8e8e" },
   shot_off: { text: "↗  OFF TARGET", color: "#ffce5a" },
 };
 
 function processEvents(snap: Snapshot): void {
   if (snap.events.length <= lastEventCount) return;
-  const shown = new Set([
-    "goal", "save", "shot_off", "interception", "tackle",
-    "kickoff", "half_time", "full_time",
-  ]);
   for (let i = lastEventCount; i < snap.events.length; i++) {
     const e = snap.events[i]!;
-    if (!shown.has(e.type)) continue;
-    const row = document.createElement("div");
-    row.className = `ev ev-${e.type}`;
-    row.textContent = `${e.minute}'  ${e.text}`;
-    feed.prepend(row);
+    // live commentary ticker at the bottom — narrates the whole passage of play
+    commPrev.textContent = commNow.textContent;
+    commNow.textContent = `${e.minute}'  ${e.text}`;
+    commNow.className = `c-${e.type}`;
+    // scrolling history panel keeps the notable beats
+    if (e.type !== "buildup") {
+      const row = document.createElement("div");
+      row.className = `ev ev-${e.type}`;
+      row.textContent = `${e.minute}'  ${e.text}`;
+      feed.prepend(row);
+    }
     const f = FLASH[e.type];
     if (f) flash = { text: f.text, color: f.color, until: performance.now() + 1300 };
   }

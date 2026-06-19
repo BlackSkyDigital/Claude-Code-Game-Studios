@@ -141,9 +141,11 @@ export class Match {
   readonly home: TeamDef;
   readonly away: TeamDef;
   private rng: RNG;
+  private crng: RNG; // separate RNG for commentary text — never perturbs the sim
   private players: Player[] = [];
   private ball: Ball;
   private startedSecondHalf = false;
+  private buildupTimer = 0;
   /** Diagnostic counters (pass/shot type mix) — used by the headless harness. */
   passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
   shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
@@ -167,6 +169,7 @@ export class Match {
     this.home = home;
     this.away = away;
     this.rng = new RNG(seed);
+    this.crng = new RNG((seed ^ 0x9e3779b9) >>> 0);
     this.tactics = [
       setup.homeTactics ?? tacticsForStyle("balanced"),
       setup.awayTactics ?? tacticsForStyle("balanced"),
@@ -299,6 +302,7 @@ export class Match {
     if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
     if (this.ball.owner) this.possessionTicks[this.ball.owner.team]++;
     this.updateFatigue();
+    this.narrateBuildup();
 
     if (!this.startedSecondHalf && this.time >= HALF_SECONDS) {
       this.startedSecondHalf = true;
@@ -708,6 +712,7 @@ export class Match {
     b.lastTeam = crosser.team;
     b.cooldown = 0.2;
     b.vel = { x: dir.x * speed, y: dir.y * speed };
+    this.emit("cross", crosser.team, crosser.name, this.vary([`${crosser.name} swings in a cross...`, `${crosser.name} whips it into the box...`, `Cross from ${crosser.name}...`, `${crosser.name} delivers from the flank...`]));
   }
 
   /** Open space ahead of a player toward the goal they attack (for runs). */
@@ -788,6 +793,11 @@ export class Match {
     b.lastTeam = passer.team;
     b.cooldown = 0.2;
     b.vel = { x: dir.x * speed, y: dir.y * speed };
+    // only narrate genuinely dangerous through balls (final third, occasionally)
+    const attHalf = passer.team === 0 ? passer.pos.x > 60 : passer.pos.x < 45;
+    if (type === "through" && passer.role !== "GK" && attHalf && this.crng.chance(0.4)) {
+      this.emit("key_pass", passer.team, passer.name, this.vary([`${passer.name} threads it through!`, `Clever ball from ${passer.name}!`, `${passer.name} slides one in behind!`, `${target.name} is sent through!`]));
+    }
   }
 
   private shoot(shooter: Player, type: ShotType): void {
@@ -836,6 +846,17 @@ export class Match {
     this.ball.vel = { x: dir.x * speed, y: dir.y * speed };
     this.shots[shooter.team]++;
     this.shotTypeCounts[type]++;
+
+    const n = shooter.name;
+    const line =
+      type === "header"
+        ? this.vary([`${n} rises to meet it — header!`, `Header from ${n}!`, `${n} gets his head to it!`])
+        : type === "chip"
+          ? this.vary([`${n} tries to chip the keeper!`, `${n} attempts a delicate dink!`])
+          : type === "power" || dGoal > 18
+            ? this.vary([`${n} lets fly from distance!`, `${n} has a crack from range!`, `${n} shoots from the edge of the box!`])
+            : this.vary([`${n} shoots!`, `${n} goes for goal!`, `Chance for ${n}!`, `${n} pulls the trigger!`]);
+    this.emit("shot", shooter.team, n, line);
   }
 
   private turnover(winner: Player, kind: "tackle" | "interception"): void {
@@ -851,14 +872,15 @@ export class Match {
     this.ball.fromCross = false;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
-    if (inFinalThird) {
+    // narrate only some final-third turnovers, so commentary stays readable
+    if (inFinalThird && this.crng.chance(0.3)) {
       this.emit(
         kind,
         winner.team,
         winner.name,
         kind === "tackle"
-          ? `${winner.name} wins it with a strong tackle.`
-          : `${winner.name} reads it and intercepts.`,
+          ? this.vary([`${winner.name} wins it with a strong tackle!`, `Crucial tackle by ${winner.name}!`, `${winner.name} dispossesses his man!`])
+          : this.vary([`${winner.name} reads it and intercepts!`, `Intercepted by ${winner.name}!`, `${winner.name} cuts it out!`]),
       );
     }
   }
@@ -955,7 +977,7 @@ export class Match {
           if (this.rng.chance(saveProb)) {
             this.shotsOnTarget[shooter.team]++; // on target and saved
             this.claim(gk);
-            this.emit("save", gk.team, gk.name, `${gk.name} saves it!`);
+            this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
           }
           // if beaten: leave it — the goal is recorded (and counted) at the line
           return;
@@ -1008,7 +1030,7 @@ export class Match {
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
       if (this.rng.chance(0.18)) {
         this.claim(claimant);
-        this.emit("save", claimant.team, claimant.name, `${claimant.name} blocks it!`);
+        this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
       }
       return;
     }
@@ -1089,7 +1111,7 @@ export class Match {
         "shot_off",
         attackTeam,
         b.shooter.name,
-        `${b.shooter.name} fires it just wide.`,
+        this.vary([`...just wide!`, `...off target.`, `${b.shooter.name} drags it wide.`, `...over the bar!`, `So close!`]),
       );
     }
     const gk = this.players.find((p) => p.team === defTeam && p.role === "GK")!;
@@ -1105,7 +1127,7 @@ export class Match {
     this.score[team]++;
     this.shotsOnTarget[team]++; // a goal is, by definition, on target
     const scorer = this.ball.shooter?.name ?? "Unknown";
-    this.emit("goal", team, scorer, `GOAL! ${scorer} scores for ${this.shortName(team)}!`);
+    this.emit("goal", team, scorer, this.vary([`GOAL! ${scorer} scores for ${this.shortName(team)}!`, `${scorer} finds the net — GOAL for ${this.shortName(team)}!`, `It's there! ${scorer} scores!`, `GOAL!! ${scorer} makes it count for ${this.shortName(team)}!`]));
     this.kickoff((1 - team) as 0 | 1, false);
   }
 
@@ -1126,6 +1148,37 @@ export class Match {
       playerName,
       text,
     });
+  }
+
+  /** Pick a commentary line (uses the commentary RNG, never the sim RNG). */
+  private vary(opts: string[]): string {
+    return this.crng.pick(opts);
+  }
+
+  /** Occasional build-up commentary while a team holds the ball in attack. */
+  private narrateBuildup(): void {
+    const o = this.ball.owner;
+    if (!o) return;
+    this.buildupTimer -= DT;
+    if (this.buildupTimer > 0) return;
+    this.buildupTimer = this.crng.range(10, 16);
+    if (o.role === "GK") return;
+    const inAttHalf = o.team === 0 ? o.pos.x > 52.5 : o.pos.x < 52.5;
+    if (!inAttHalf) return;
+    const tn = o.team === 0 ? this.home.short : this.away.short;
+    const flank = o.pos.y > 45 ? "down the left" : o.pos.y < 23 ? "down the right" : "through the middle";
+    this.emit(
+      "buildup",
+      o.team,
+      undefined,
+      this.vary([
+        `${tn} building ${flank}`,
+        `${tn} work it ${flank}`,
+        `${tn} probing for an opening`,
+        `${o.name} looks for a way through`,
+        `${tn} keeping possession`,
+      ]),
+    );
   }
 
   // ---- rendering ----

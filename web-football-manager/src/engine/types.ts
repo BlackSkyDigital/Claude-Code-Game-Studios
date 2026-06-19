@@ -57,10 +57,15 @@ export interface TeamDef {
  */
 export type MatchEventType =
   | "kickoff"
+  | "buildup"
+  | "shot"
   | "goal"
   | "shot_on"
   | "shot_off"
   | "save"
+  | "block"
+  | "cross"
+  | "key_pass"
   | "tackle"
   | "interception"
   | "throw_in"
