@@ -66,16 +66,17 @@ across 0–18m from goal (concentrated 6–12m) instead of clustering on the lin
 | Throw‑ins | 🟡 | Awarded and taken, but no routine (long throws, quick throws) |
 | **Corners** | ✅ | Box loaded with best aerial players; delivery → aerial duel |
 | Goal kicks | ✅ | |
-| **Penalties** | ❌ | No fouls‑in‑box → spot kick yet (next increment) |
-| Direct/indirect free kicks | ❌ | Fouls don't yet create free‑kick set pieces |
+| **Penalties** | ✅ | Fouls in the box → spot kick (taker quality vs keeper, ~0.4/match) |
+| **Free kicks (from fouls)** | ✅ | Non‑box fouls award a quick free kick to the fouled side |
+| Free‑kick *shots* (direct curled efforts / wall) | ❌ | Not modelled yet |
 | Set‑piece routines / designated takers | 🟡 | Best crosser takes corners; no trained routines |
 
 ## 5. Discipline
 
 | Element | Status | Notes |
 |---|---|---|
-| Fouls | 🟡 | Modelled as turnovers; no whistle, no free kick awarded |
-| Yellow / red cards | ❌ | No bookings or sendings‑off |
+| **Fouls** | ✅ | Mistimed/cynical challenges concede a foul → free kick or penalty (~10/match) |
+| **Yellow / red cards** | ✅ | Bookings, second yellows & straight reds; a sent-off side plays a man down (~2 yellow, ~0.25 red/match) |
 | Advantage played | 🟡 | Offside "advantage" only |
 
 ## 6. Conditions, fitness & health
@@ -85,7 +86,7 @@ across 0–18m from goal (concentrated 6–12m) instead of clustering on the lin
 | **Individual fitness per player** | ✅ | Each player has live condition (now shown as a per‑player bar in the UI) |
 | Fatigue from tempo/press/work rate | ✅ | Drains by exertion vs Stamina/Natural Fitness |
 | **Fitness → performance** (slower, more mistakes) | ✅ | Low condition cuts pace (effSpeed) and execution sharpness (passes/shots/first touch) |
-| **Injuries / knocks** | 🟡 | Players can pick up a knock (slower, more error‑prone) — but no severity tiers, no time off, no subs |
+| **Injuries / knocks** | 🟡 | Players pick up knocks (slower, error‑prone) and get **subbed off**; no severity tiers / time-out yet |
 | Weather (rain/heat/wind) | ✅ | Affects friction, directness, pass error, shot scatter, fatigue |
 | Home advantage / travel | ✅ | Sharpness lift at home; away travel fatigue |
 | Morale / confidence / momentum | ❌ | No psychological state affecting play |
@@ -97,9 +98,9 @@ across 0–18m from goal (concentrated 6–12m) instead of clustering on the lin
 |---|---|---|
 | Team styles (tiki‑taka, gegenpress, counter, route‑one, catenaccio, …) | ✅ | Presets of mentality/tempo/directness/pressing/line height/width |
 | **Player traits / PPMs** | ✅ | shoots_from_distance, places_shots, tries_killer_balls, likes_to_dribble, runs_in_behind, cuts_inside, gets_forward |
-| Per‑player **individual instructions** | ❌ | No per‑role roles/duties (e.g. inverted winger, ball‑playing CB, target man) |
-| **In‑match management** (live tactic/mentality changes, shouts) | ❌ | Tactics fixed at kick‑off |
-| **Substitutions** | ❌ | None — required to make injuries/fatigue meaningful |
+| Per‑player **individual instructions** | 🟡 | Expressed via traits (inverted winger cuts in, gets‑forward runs, killer balls); no formal role/duty layer yet |
+| **In‑match management** (live tactic/mentality changes, shouts) | ❌ | Tactics still fixed at kick‑off (human-facing controls are the next step) |
+| **Substitutions** | ✅ | Auto-subs for injuries, then tired legs late on (like-for-like, up to 5; ~5/match) |
 | Formation changes mid‑match | ❌ | |
 | Set‑piece / corner instructions | ❌ | |
 
@@ -132,31 +133,46 @@ across 0–18m from goal (concentrated 6–12m) instead of clustering on the lin
 
 ## Prioritised roadmap (next increments)
 
-1. **In‑match management + substitutions** — live mentality/tempo/press changes,
-   touchline shouts, subs (which finally makes injuries & fatigue matter). *High*
-2. **Fouls → free kicks & penalties + cards** — proper discipline and a spot‑kick
-   set piece. *High* (most‑requested missing restart)
-3. **Player roles & duties + individual instructions** — inverted winger,
-   ball‑playing defender, target man, etc., layered on top of traits. *Medium*
+1. **Striker-concentration rework** — the central striker still takes most shots
+   because the attack funnels a through-ball to him almost every move. Cut-backs
+   and inverted-winger cut-ins now spread ~25% of goals to the flanks (was ~5%),
+   but true balance needs **defenders man-marking the striker** and fewer clean
+   through-balls so play is worked rather than funnelled. *High*
+2. **Human in‑match management** — the engine now *makes* auto-subs; next is
+   giving the player live mentality/tempo/press controls, touchline shouts and
+   manual subs. *High*
+3. **Player roles & duties** — a formal role/duty layer (inverted winger,
+   ball‑playing defender, target man) on top of the trait behaviours. *Medium*
 4. **Defensive depth** — man‑marking assignments, zonal options, an active
-   offside‑trap line that steps up. *Medium*
+   offside‑trap line that steps up; a true possession model (so a high press
+   out-possesses a deep block, not the reverse). *Medium*
 5. **Combination play** — one‑twos, overlaps/underlaps, third‑man runs. *Medium*
 6. **Ball height / true physics** — Z axis for bouncing balls, volleys, headers
    from height. *Lower* (visual polish)
 7. **Morale / momentum** — confidence swings that nudge sharpness within a match. *Lower*
 
-## What changed in the current increment
+## What changed in the latest increment (gap-fix pass)
 
-Implemented and calibrated this pass:
+Implemented and calibrated (headless, 40 matches): goals 2.5/m, shots ~36,
+fouls ~10, yellows ~2, reds ~0.25/m, pens ~0.4/m, subs ~5/m, offsides ~2.8.
 
-- 1v1 **take‑ons** (per‑decision, attribute + trait driven, with a pace burst)
-- **Off‑ball runs in behind** (Off‑the‑Ball + `runs_in_behind`)
-- **Player traits / PPMs** wired into shooting, passing and dribbling decisions
-- **First touch under pressure** + **fitness‑driven mistakes**
-- **Shot‑position fix**: carrier pulls up at the box edge; shots come from
-  realistic distances rather than the goal line
-- **Goalkeeper**: dives across to the shot; rushes out for clean‑through balls
-- **Offsides** (second‑last‑defender line, judged when the flagged runner plays it)
-- **Corners** (loaded box → delivery → aerial duel; conceded from saves/blocks/clearances)
-- **Individual fitness** surfaced per player (bar) + **injuries/knocks** that slow
-  and degrade a player
+- **Fouls → free kicks & penalties** — mistimed/cynical challenges concede a
+  foul; in the box it's a spot kick (taker quality vs keeper).
+- **Cards** — yellows, second-yellows and straight reds; a sent-off side plays
+  with ten men for the rest of the match.
+- **Substitutions** — auto-subs for injuries, then fresh legs for the most tired
+  outfielders late on (like-for-like, up to 5), with a full bench per team.
+- **Goal distribution** — **cut-backs** to arriving players at the top of the box
+  and **inverted-winger** cut-ins now give wingers/midfield a real share of goals
+  (~25%, up from ~5%). *(Striker still dominant — see roadmap #1.)*
+- **Possession metric** — now credits the in-possession team while their pass is
+  travelling, so quick-passing sides aren't under-counted (gegenpress vs deep
+  block moved from 41-59 to 45-55).
+- **Long shots fixed** — the distance curve no longer hits zero at 22m, so
+  long-shot specialists and midfielders can finally have a crack from range.
+
+### Earlier this session
+1v1 take-ons; off-ball runs in behind; player traits/PPMs; first-touch under
+pressure; fitness-driven mistakes; shot-position fix (pull up at the box edge);
+keeper diving & rushing out; offsides; corners; individual fitness + injuries;
+goal-celebration highlights that play through the net.

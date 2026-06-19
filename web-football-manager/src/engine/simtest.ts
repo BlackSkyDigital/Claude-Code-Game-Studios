@@ -23,6 +23,10 @@ let totalTakeOnWon = 0;
 let totalCorners = 0;
 let totalPens = 0;
 let totalOffsides = 0;
+let totalFouls = 0;
+let totalYellows = 0;
+let totalReds = 0;
+let totalSubs = 0;
 const scoreline = new Map<string, number>();
 
 for (let seed = 1; seed <= N; seed++) {
@@ -37,6 +41,10 @@ for (let seed = 1; seed <= N; seed++) {
   totalCorners += m.cornerCount;
   totalPens += m.penaltyCount;
   totalOffsides += m.offsideCount;
+  totalFouls += m.foulCount;
+  totalYellows += m.yellowCards;
+  totalReds += m.redCards;
+  totalSubs += m.subsMade;
   if (h > a) homeWins++;
   else if (h < a) awayWins++;
   else draws++;
@@ -54,6 +62,9 @@ console.log(
 );
 console.log(`Avg corners     : ${(totalCorners / N).toFixed(1)}`);
 console.log(`Avg offsides    : ${(totalOffsides / N).toFixed(1)}`);
+console.log(`Avg fouls       : ${(totalFouls / N).toFixed(1)}`);
+console.log(`Avg cards       : ${(totalYellows / N).toFixed(2)} yellow, ${(totalReds / N).toFixed(2)} red`);
+console.log(`Avg subs made   : ${(totalSubs / N).toFixed(1)}`);
 console.log(`Avg penalties   : ${(totalPens / N).toFixed(2)}`);
 console.log(
   `Results         : ${home.short} ${homeWins} / Draw ${draws} / ${away.short} ${awayWins}`,

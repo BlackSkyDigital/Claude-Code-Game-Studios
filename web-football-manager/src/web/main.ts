@@ -129,7 +129,9 @@ const EVENT_LEVEL: Record<string, number> = {
   offside: 4,
   interception: 4,
   tackle: 4,
+  foul: 4,
   injury: 4,
+  substitution: 4,
 };
 const MODE_THRESHOLD: Record<string, number> = {
   goals: 1,

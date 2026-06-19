@@ -45,6 +45,13 @@ export const TEAMS: TeamDef[] = [
       p("Haaland", 9, "ST", 17, { finishing: 19, strength: 18, pace: 17 }, ["runs_in_behind", "places_shots"]),
       p("Doku", 11, "ML", 15, { pace: 19, acceleration: 19, dribbling: 18 }, ["likes_to_dribble", "cuts_inside"]),
     ],
+    bench: [
+      p("Ortega", 18, "GK", 14),
+      p("Akanji", 25, "DC", 15, { pace: 16 }),
+      p("Kovacic", 8, "MC", 15, { technique: 16, dribbling: 15 }),
+      p("Grealish", 10, "ML", 15, { dribbling: 17, technique: 16 }, ["likes_to_dribble"]),
+      p("Alvarez", 19, "ST", 15, { finishing: 16, offTheBall: 16 }, ["runs_in_behind"]),
+    ],
   },
   {
     name: "Liverpool",
@@ -64,6 +71,13 @@ export const TEAMS: TeamDef[] = [
       p("Salah", 11, "MR", 18, { finishing: 18, pace: 17, dribbling: 18, composure: 17 }, ["cuts_inside", "places_shots"]),
       p("Nunez", 9, "ST", 15, { pace: 18, strength: 16, finishing: 14 }, ["runs_in_behind"]),
       p("Diaz", 7, "ML", 16, { dribbling: 17, pace: 18, acceleration: 18 }, ["likes_to_dribble", "cuts_inside"]),
+    ],
+    bench: [
+      p("Kelleher", 62, "GK", 14),
+      p("Quansah", 78, "DC", 14, { strength: 15 }),
+      p("Endo", 3, "MC", 14, { tackling: 16, workRate: 16 }),
+      p("Elliott", 19, "MR", 15, { technique: 16, passing: 15 }, ["cuts_inside"]),
+      p("Jota", 20, "ST", 16, { finishing: 17, offTheBall: 16 }, ["runs_in_behind"]),
     ],
   },
   {
@@ -85,6 +99,13 @@ export const TEAMS: TeamDef[] = [
       p("Jesus", 9, "ST", 15, { dribbling: 16, workRate: 17 }, ["likes_to_dribble"]),
       p("Martinelli", 11, "ML", 16, { pace: 18, acceleration: 18 }, ["runs_in_behind", "likes_to_dribble"]),
     ],
+    bench: [
+      p("Neto", 32, "GK", 14),
+      p("Kiwior", 15, "DC", 14, { pace: 15 }),
+      p("Partey", 5, "MC", 15, { tackling: 16, passing: 15 }),
+      p("Trossard", 19, "ML", 15, { finishing: 16, technique: 16 }, ["cuts_inside"]),
+      p("Nketiah", 14, "ST", 14, { finishing: 15 }, ["runs_in_behind"]),
+    ],
   },
   {
     name: "Real Madrid",
@@ -104,6 +125,13 @@ export const TEAMS: TeamDef[] = [
       p("Vinicius", 7, "MR", 18, { pace: 19, acceleration: 19, dribbling: 19, flair: 18 }, ["likes_to_dribble", "cuts_inside"]),
       p("Mbappe", 9, "ST", 19, { pace: 20, acceleration: 20, finishing: 18, dribbling: 18 }, ["runs_in_behind", "likes_to_dribble", "places_shots"]),
       p("Rodrygo", 11, "ML", 16, { dribbling: 17, pace: 17 }, ["cuts_inside"]),
+    ],
+    bench: [
+      p("Lunin", 13, "GK", 15),
+      p("Alaba", 4, "DC", 15, { passing: 16, composure: 16 }),
+      p("Modric", 10, "MC", 16, { passing: 18, vision: 17, technique: 17 }, ["tries_killer_balls"]),
+      p("Brahim", 21, "MR", 15, { dribbling: 16, technique: 16 }, ["cuts_inside", "likes_to_dribble"]),
+      p("Endrick", 16, "ST", 15, { finishing: 16, pace: 16 }, ["runs_in_behind"]),
     ],
   },
 ];

@@ -8,6 +8,7 @@ import {
   type Attrs,
   type MatchEvent,
   type MatchEventType,
+  type PlayerDef,
   type Role,
   type TeamDef,
   type Trait,
@@ -59,6 +60,8 @@ interface Player {
   traits: Set<Trait>; // preferred player moves that bias decisions
   dribbleTimer: number; // >0 just after beating a man: a burst of pace & control
   injured: boolean; // carrying a knock — slower, more error-prone
+  yellow: boolean; // has been booked (a second booking is a red)
+  starter: boolean; // started the match (vs came off the bench)
   stat: PlayerStat;
 }
 
@@ -87,6 +90,7 @@ interface Ball {
   shotType: ShotType | null; // type of the in-flight shot
   passType: PassType | null; // type of the in-flight pass
   fromCross: boolean; // ball delivered as a cross — an attacker in the box finishes first-time
+  cutback: boolean; // low pull-back to the top of the box — receiver shoots first-time
   airTimer: number; // seconds the ball is airborne (lofted/chip pass beats the ground press)
   aimY: number; // projected crossing point of the current shot (for on-target)
   judged: boolean; // whether the current shot has already been adjudicated
@@ -128,6 +132,8 @@ export interface Snapshot {
     hasBall: boolean;
     rating: number;
     goals: number;
+    assists: number;
+    shots: number;
     fitness: number; // individual condition 0–100
     injured: boolean;
   }[];
@@ -189,7 +195,15 @@ export class Match {
   cornerCount = 0;
   penaltyCount = 0;
   offsideCount = 0;
+  foulCount = 0;
+  yellowCards = 0;
+  redCards = 0;
+  subsMade = 0;
   shotDist: number[] = []; // diagnostic: distance-to-goal of each shot
+  private bench: [Player[], Player[]] = [[], []];
+  private subsUsed: [number, number] = [0, 0];
+  private static MAX_SUBS = 5;
+  private subScanTimer = 0;
   private tactics: [TeamTactics, TeamTactics];
   private weather: Weather;
   private wx: WeatherMods;
@@ -231,6 +245,7 @@ export class Match {
       shotType: null,
       passType: null,
       fromCross: false,
+      cutback: false,
       airTimer: 0,
       aimY: 34,
       judged: false,
@@ -244,6 +259,32 @@ export class Match {
 
   private setupPlayers(): void {
     let id = 0;
+    const mk = (pd: PlayerDef, teamIdx: 0 | 1, base: Vec, startCond: number, starter: boolean): Player => {
+      const a = pd.attrs;
+      return {
+        id: id++,
+        team: teamIdx,
+        name: pd.name,
+        number: pd.number,
+        role: pd.role,
+        attrs: a,
+        color: teamIdx === 0 ? this.home.color : this.away.color,
+        textColor: teamIdx === 0 ? this.home.textColor : this.away.textColor,
+        pos: { ...base },
+        base,
+        target: { ...base },
+        baseSpeed: 4.6 + ((a.pace + a.acceleration) / 2) * 0.19,
+        condition: startCond,
+        decisionTimer: 0,
+        assistFrom: null,
+        traits: new Set(pd.traits ?? []),
+        dribbleTimer: 0,
+        injured: false,
+        yellow: false,
+        starter,
+        stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
+      };
+    };
     for (const teamIdx of [0, 1] as const) {
       const def = teamIdx === 0 ? this.home : this.away;
       const slots: Slot[] = FORMATIONS[def.formation] ?? FORMATIONS["4-3-3"]!;
@@ -252,30 +293,12 @@ export class Match {
       def.players.forEach((pd, i) => {
         const slot = slots[i]!;
         const base = teamIdx === 0 ? { ...slot.pos } : mirror(slot.pos);
-        const a = pd.attrs;
-        this.players.push({
-          id: id++,
-          team: teamIdx,
-          name: pd.name,
-          number: pd.number,
-          role: pd.role,
-          attrs: a,
-          color: def.color,
-          textColor: def.textColor,
-          pos: { ...base },
-          base,
-          target: { ...base },
-          // speed blends pace (top speed) and acceleration
-          baseSpeed: 4.6 + ((a.pace + a.acceleration) / 2) * 0.19,
-          condition: startCond,
-          decisionTimer: 0,
-          assistFrom: null,
-          traits: new Set(pd.traits ?? []),
-          dribbleTimer: 0,
-          injured: false,
-          stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
-        });
+        this.players.push(mk(pd, teamIdx, base, startCond, true));
       });
+      // build the bench (kept off the pitch until brought on)
+      for (const pd of def.bench ?? []) {
+        this.bench[teamIdx].push(mk(pd, teamIdx, { ...CENTER }, startCond, false));
+      }
     }
   }
 
@@ -330,6 +353,139 @@ export class Match {
     this.emit("injury", p.team, p.name, this.vary([`${p.name} is hurt and needs treatment...`, `${p.name} picks up a knock but plays on.`, `${p.name} is feeling that one.`]));
   }
 
+  /** A foul: a penalty if it's in the box, otherwise a (quick) free kick to the
+   * fouled side. May also bring a card. */
+  private commitFoul(fouler: Player, victim: Player): void {
+    this.foulCount++;
+    // a foul in the box is a penalty most (not all) of the time — some are
+    // adjudged just outside the area or the attacker shields it out
+    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.35);
+    this.maybeCard(fouler, victim, pen);
+    if (pen) {
+      this.awardPenalty(victim.team);
+      return;
+    }
+    const b = this.ball;
+    b.owner = victim;
+    b.pos = { ...victim.pos };
+    b.vel = { x: 0, y: 0 };
+    b.shooter = null;
+    b.receiver = null;
+    b.passer = null;
+    b.isShot = false;
+    b.shotType = null;
+    b.passType = null;
+    b.fromCross = false;
+    b.cutback = false;
+    b.airTimer = 0;
+    b.judged = false;
+    b.offsideFlag = null;
+    b.cooldown = 0.3;
+    b.lastTeam = victim.team;
+    if (this.crng.chance(0.5)) {
+      this.emit("foul", fouler.team, fouler.name, this.vary([`Foul by ${fouler.name}.`, `${fouler.name} gives away a free kick.`, `Free kick — ${fouler.name} caught him late.`]));
+    }
+  }
+
+  /** A spot kick: taker quality vs the keeper, ~75-80% conversion. */
+  private awardPenalty(team: 0 | 1): void {
+    this.penaltyCount++;
+    const taker = this.players
+      .filter((p) => p.team === team && p.role !== "GK")
+      .sort((a, c) => c.attrs.finishing + c.attrs.composure + c.attrs.technique - (a.attrs.finishing + a.attrs.composure + a.attrs.technique))[0];
+    if (!taker) return;
+    const gk = this.players.find((p) => p.team !== team && p.role === "GK");
+    this.emit("penalty", team, taker.name, this.vary([`PENALTY to ${this.shortName(team)}! ${taker.name} will take it...`, `It's a spot kick — ${taker.name} steps up...`]));
+    taker.stat.shots++;
+    this.shots[team]++;
+    this.shotDist.push(11);
+    taker.assistFrom = null;
+    let conv = 0.78 + ((taker.attrs.finishing + taker.attrs.composure) / 2 - 14) / 60;
+    if (gk) conv -= (gk.attrs.reflexes - 14) / 120;
+    conv = clamp(conv, 0.5, 0.92);
+    if (this.rng.chance(conv)) {
+      const goal = this.oppGoal(team);
+      this.ball.owner = null;
+      this.ball.shooter = taker;
+      this.ball.isShot = true;
+      this.ball.pos = { x: goal.x, y: 34 };
+      this.ball.vel = { x: 0, y: 0 };
+      this.scoreGoal(team); // handles score, on-target, goal stat, celebration
+    } else {
+      this.shotsOnTarget[team]++;
+      taker.stat.sot++;
+      if (gk) {
+        gk.stat.saves++;
+        this.claim(gk);
+      }
+      this.emit("save", gk ? gk.team : undefined, gk ? gk.name : undefined, this.vary([`SAVED from the spot! Huge moment!`, `The keeper guesses right — penalty saved!`]));
+    }
+  }
+
+  /** Booking logic: cynical/aggressive fouls draw cards; a second yellow or a
+   * reckless challenge is a red and the player is sent off. */
+  private maybeCard(fouler: Player, victim: Player, isPen: boolean): void {
+    const dangerous = this.inFinalThird(victim) || isPen;
+    if (dangerous && this.rng.chance(0.008)) {
+      this.sendOff(fouler, true);
+      return;
+    }
+    let yellowP = 0.07 + fouler.attrs.aggression / 160;
+    if (dangerous) yellowP += 0.1; // stopping a promising move
+    if (this.rng.chance(yellowP)) {
+      if (fouler.yellow) this.sendOff(fouler, false);
+      else {
+        fouler.yellow = true;
+        this.yellowCards++;
+        this.emit("foul", fouler.team, fouler.name, this.vary([`${fouler.name} goes into the book.`, `Yellow card for ${fouler.name}.`]));
+      }
+    }
+  }
+
+  /** Send a player off — he leaves the pitch and the side plays a man down. */
+  private sendOff(p: Player, straight: boolean): void {
+    this.redCards++;
+    this.emit("foul", p.team, p.name, straight ? `RED CARD! ${p.name} is sent off!` : `Second booking — ${p.name} is off!`);
+    const idx = this.players.indexOf(p);
+    if (idx >= 0) this.players.splice(idx, 1);
+    if (this.ball.owner === p) this.ball.owner = null;
+  }
+
+  /** Periodic auto-substitutions: replace injured players, then tired ones in
+   * the closing stages, like-for-like from the bench (up to MAX_SUBS). */
+  private autoSubs(): void {
+    for (const team of [0, 1] as const) {
+      if (this.subsUsed[team] >= Match.MAX_SUBS || this.bench[team].length === 0) continue;
+      const onPitch = this.players.filter((p) => p.team === team && p.role !== "GK");
+      let out = onPitch.find((p) => p.injured);
+      // freshen up the legs in the closing stages — bring on a fresh runner for
+      // the most tired outfielder
+      if (!out && this.time > 64 * 60) {
+        out = onPitch.filter((p) => p.condition < 0.75).sort((a, b) => a.condition - b.condition)[0];
+      }
+      if (!out) continue;
+      let idx = this.bench[team].findIndex((p) => p.role === out!.role);
+      if (idx < 0) idx = 0;
+      this.makeSub(team, out, idx);
+    }
+  }
+
+  private makeSub(team: 0 | 1, out: Player, benchIdx: number): void {
+    const inP = this.bench[team].splice(benchIdx, 1)[0];
+    if (!inP) return;
+    inP.base = { ...out.base };
+    inP.pos = { ...out.base };
+    inP.target = { ...out.base };
+    inP.condition = Math.max(inP.condition, 0.95); // fresh legs
+    const idx = this.players.indexOf(out);
+    if (idx >= 0) this.players.splice(idx, 1, inP);
+    else this.players.push(inP);
+    if (this.ball.owner === out) this.ball.owner = inP;
+    this.subsUsed[team]++;
+    this.subsMade++;
+    this.emit("substitution", team, inP.name, `Sub for ${this.shortName(team)}: ${inP.name} on, ${out.name} off${out.injured ? " (injured)" : ""}.`);
+  }
+
   private kickoff(kickingTeam: 0 | 1, matchStart: boolean): void {
     for (const p of this.players) p.pos = { ...p.base };
     this.ball.pos = { ...CENTER };
@@ -342,6 +498,7 @@ export class Match {
     this.ball.passType = null;
     this.ball.shotType = null;
     this.ball.fromCross = false;
+    this.ball.cutback = false;
     this.ball.cooldown = 0;
     this.ball.offsideFlag = null;
     this.ball.lastTeam = kickingTeam;
@@ -371,8 +528,18 @@ export class Match {
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
     if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
     for (const p of this.players) if (p.dribbleTimer > 0) p.dribbleTimer -= DT;
+    // Possession = control, not just dwell time: credit the team in possession
+    // while they hold it AND while their pass is travelling (so quick-passing
+    // sides aren't under-counted vs a slow team that holds each touch longer).
     if (this.ball.owner) this.possessionTicks[this.ball.owner.team]++;
+    else if (!this.ball.isShot && this.ball.receiver && this.ball.lastTeam !== null)
+      this.possessionTicks[this.ball.lastTeam]++;
     this.updateFatigue();
+    this.subScanTimer -= DT;
+    if (this.subScanTimer <= 0) {
+      this.subScanTimer = 20;
+      this.autoSubs();
+    }
     this.narrateBuildup();
 
     if (!this.startedSecondHalf && this.time >= HALF_SECONDS) {
@@ -474,6 +641,21 @@ export class Match {
     for (const p of this.players) {
       if (p === b.owner) {
         const g = this.oppGoal(p.team);
+        // An inverted winger in the final third drives INFIELD to the top of the
+        // box (the half-space), turning a wide angle into a central shooting
+        // chance — this is how wingers actually get their goals.
+        if (
+          p.traits.has("cuts_inside") &&
+          this.inFinalThird(p) &&
+          Math.abs(p.pos.y - 34) > 9 &&
+          p.dribbleTimer <= 0
+        ) {
+          const aimX = p.team === 0 ? 90 : 15;
+          const aimY = 34 + (p.pos.y > 34 ? 6 : -6);
+          const dir = norm(sub({ x: aimX, y: aimY }, p.pos));
+          p.target = clampPitch({ x: p.pos.x + dir.x * 8, y: p.pos.y + dir.y * 8 });
+          continue;
+        }
         const dir = norm(sub(g, p.pos));
         const dg = dist(p.pos, g);
         // Carry toward goal, but PULL UP around the edge of the box rather than
@@ -581,14 +763,20 @@ export class Match {
         for (const p of this.players) {
           if (p.team !== possTeam || p === b.owner) continue;
           const fwd = p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
-          if (!fwd) continue;
+          // a single forward-running midfielder may join late ("gets forward"),
+          // but most midfielders stay to support so the shape doesn't collapse
+          const lateRunner = p.role === "MC" && p.traits.has("gets_forward");
+          if (!fwd && !lateRunner) continue;
           const eager = p.traits.has("runs_in_behind");
-          if (!eager && p.attrs.offTheBall < 15) continue;
+          if (!fwd && !eager && p.attrs.offTheBall < 15) continue;
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
-          if (phase < (eager ? 0.3 : 0.6)) continue;
-          const targetX = clamp(lineX + adir * (5 + p.attrs.offTheBall * 0.2), lo, hi);
-          const targetY = clamp(34 + (p.pos.y - 34) * 0.8, 8, 60);
+          if (phase < (eager ? 0.45 : 0.65)) continue;
+          const depth = lateRunner ? 2 : 5 + p.attrs.offTheBall * 0.2;
+          const targetX = clamp(lineX + adir * depth, lo, hi);
+          // wide players hold a wider line (back-post threat); others come central
+          const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
+          const targetY = clamp(34 + (p.pos.y - 34) * pullCentral, 8, 60);
           p.target = clampPitch({ x: targetX, y: targetY });
         }
       }
@@ -657,6 +845,16 @@ export class Match {
         this.turnover(challenger, "tackle");
         return;
       }
+      // a mistimed / cynical challenge concedes a foul. This runs every tick a
+      // defender is tight, so the per-tick probability must be tiny (it adds up
+      // to ~20-25 fouls a match). Aggressive, less clean tacklers give away more.
+      let foulP = clamp(0.00005, 0.003, 0.0016 * (ca.aggression / 12) * (12 / (ca.tackling + 4)));
+      if (this.inFinalThird(owner)) foulP *= 1.3;
+      if (this.inBoxAttacking(owner)) foulP *= 0.05; // defenders are very careful in the box
+      if (this.rng.chance(foulP)) {
+        this.commitFoul(challenger, owner);
+        return;
+      }
     }
 
     // periodic decision — per-player cadence (a "slice"), quicker at high tempo
@@ -687,21 +885,40 @@ export class Match {
         dGoal < 13
           ? owner.attrs.finishing
           : owner.attrs.finishing * 0.4 + owner.attrs.longShots * 0.6;
-      const closeness = Math.max(0, 1 - dGoal / 22);
+      // taper with distance but keep some threat from range, so long-shot
+      // specialists and midfielders can actually have a crack (previously this
+      // hit zero beyond ~22m, which made every shot come from the striker)
+      // taper with distance; zero beyond ~26m so only long-shot types try from
+      // range, but not so generous that junk shots pile up while dwelling
+      const closeness = Math.max(0, 1 - dGoal / 24);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.02;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.015;
       if (space < 2.5) shotProb *= 0.5; // crowded out
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
-      // a clear sight of goal with space: take it on rather than dawdle (this is
-      // a floor, only when genuinely unmarked — keeps the shot count realistic)
+      // floors fire only when genuinely UNMARKED (space-gated) so they don't
+      // pile up while a striker dwells closely marked in the box
       if (dGoal < 14 && angle > 0.6 && space > 5) shotProb = Math.max(shotProb, 0.1);
       if (dGoal < 8 && angle > 0.75 && space > 6) shotProb = Math.max(shotProb, 0.2); // big chance
       goodChance = closeness * angle > 0.35;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
         return;
+      }
+    }
+
+    // CUT-BACK — in the box (often after cutting in or beating the byline), pull
+    // it back to a team-mate arriving at the top of the box for a first-time
+    // shot. This is the classic source of midfield & winger goals.
+    if (this.inBoxAttacking(owner)) {
+      const cb = this.bestCutbackTarget(owner);
+      if (cb) {
+        const cbProb = 0.022 + (owner.attrs.vision / 20) * 0.025;
+        if (this.rng.chance(cbProb)) {
+          this.cutback(owner, cb);
+          return;
+        }
       }
     }
 
@@ -764,6 +981,11 @@ export class Match {
       (ca.tackling * 0.5 + ca.marking * 0.2 + ca.anticipation * 0.2 + ca.strength * 0.1) *
       this.sharp(challenger);
     if (this.rng.chance(beat / (beat + stop))) {
+      // the beaten defender may cynically haul him down instead of letting him go
+      if (this.rng.chance(0.02 + challenger.attrs.aggression / 500)) {
+        this.commitFoul(challenger, owner);
+        return;
+      }
       this.takeOnWon++;
       owner.dribbleTimer = 1.2; // burst of pace & control
       // knock it past and leave the beaten man trailing behind the carrier
@@ -826,7 +1048,7 @@ export class Match {
       // score the option: progress + how open + a bonus for finding a shooter,
       // minus distance risk. Risky/ambitious types are downweighted when the
       // passer lacks the skill to pull them off.
-      const shooterBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.9 : 0;
+      const shooterBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.5 : 0;
       const skill = oa.passing * 0.5 + oa.technique * 0.3 + oa.vision * 0.2;
       const typeRisk =
         type === "through" ? 8 : type === "lofted" ? 9 : type === "chip" ? 11 : type === "driven" ? 3 : 0;
@@ -863,15 +1085,67 @@ export class Match {
       if (!advanced || !centralEnough) continue; // need a real target in the box
       const central = 1 - Math.min(1, Math.abs(p.pos.y - 34) / 18);
       const marker = this.nearestOutfield((1 - crosser.team) as 0 | 1, p.pos);
-      const openness = marker ? Math.min(10, dist(marker.pos, p.pos)) : 10;
+      const openness = marker ? Math.min(12, dist(marker.pos, p.pos)) : 12;
       const aerial = (p.attrs.heading + p.attrs.jumpingReach) / 2;
-      const score = central * 14 + openness + aerial * 0.4 - dist(p.pos, goal) * 0.2;
+      // reward the player who's actually free (back-post winger, arriving
+      // midfielder) rather than always hammering it at the central striker
+      const score =
+        central * 7 + openness * 1.6 + aerial * 0.4 + p.attrs.offTheBall * 0.15 - dist(p.pos, goal) * 0.18;
       if (score > bestScore) {
         bestScore = score;
         best = p;
       }
     }
     return best;
+  }
+
+  /** Best team-mate arriving at the top of the box for a cut-back (central,
+   * behind the carrier, in shooting range and open). */
+  private bestCutbackTarget(carrier: Player): Player | null {
+    const goal = this.oppGoal(carrier.team);
+    const carrierDg = dist(carrier.pos, goal);
+    let best: Player | null = null;
+    let bestScore = -Infinity;
+    for (const p of this.players) {
+      if (p.team !== carrier.team || p === carrier || p.role === "GK") continue;
+      const dg = dist(p.pos, goal);
+      if (dg < 11 || dg > 23) continue; // the "top of the box" band
+      if (Math.abs(p.pos.y - 34) > 15) continue; // central-ish
+      if (dg < carrierDg - 1) continue; // must be behind the carrier (a pull-back)
+      const marker = this.nearestOutfield((1 - carrier.team) as 0 | 1, p.pos);
+      const open = marker ? Math.min(10, dist(marker.pos, p.pos)) : 10;
+      const score = open * 1.5 + p.attrs.finishing * 0.2 + p.attrs.longShots * 0.1 - Math.abs(p.pos.y - 34) * 0.2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Pull the ball back low to a team-mate at the top of the box. */
+  private cutback(passer: Player, target: Player): void {
+    const b = this.ball;
+    const d = dist(passer.pos, target.pos);
+    const skill = passer.attrs.passing * 0.6 + passer.attrs.vision * 0.4;
+    const errSd = ((1 - skill / 20) * 2.5) / this.sharp(passer) + 1 + this.wx.passError;
+    const aim: Vec = { x: target.pos.x + this.rng.gauss(0, errSd), y: target.pos.y + this.rng.gauss(0, errSd) };
+    const dir = norm(sub(aim, passer.pos));
+    passer.stat.passA++;
+    b.owner = null;
+    b.shooter = null;
+    b.passer = passer;
+    b.receiver = target;
+    b.isShot = false;
+    b.passType = "driven";
+    b.fromCross = false;
+    b.cutback = true;
+    b.airTimer = 0;
+    b.offsideFlag = null;
+    b.lastTeam = passer.team;
+    b.cooldown = 0.15;
+    b.vel = { x: dir.x * (14 + d * 0.4), y: dir.y * (14 + d * 0.4) };
+    this.emit("key_pass", passer.team, passer.name, this.vary([`${passer.name} cuts it back!`, `${passer.name} pulls it back from the byline...`, `Cut-back from ${passer.name}...`]));
   }
 
   /** Deliver a cross to a teammate in the box (lofted, beats the ground press). */
@@ -1121,6 +1395,7 @@ export class Match {
     this.ball.passType = null;
     this.ball.shotType = null;
     this.ball.fromCross = false;
+    this.ball.cutback = false;
     this.ball.offsideFlag = null;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
@@ -1218,6 +1493,7 @@ export class Match {
     b.shotType = null;
     b.passType = null;
     b.fromCross = false;
+    b.cutback = false;
     b.airTimer = 0;
     b.judged = false;
     b.offsideFlag = null;
@@ -1296,6 +1572,23 @@ export class Match {
         return;
       }
       b.offsideFlag = null;
+    }
+
+    // (1a-ii) A cut-back has reached a team-mate at the top of the box: he hits
+    // it first time (a prime midfield/winger chance).
+    if (b.cutback) {
+      b.cutback = false;
+      const goal = this.oppGoal(claimant.team);
+      if (!fromOpponent && claimant.role !== "GK" && dist(claimant.pos, goal) < 23) {
+        if (b.passer && b.passer.team === claimant.team && b.passer !== claimant) {
+          b.passer.stat.passC++;
+          b.passer.stat.keyPasses++;
+          claimant.assistFrom = b.passer; // credit the cut-back as an assist
+        }
+        this.shoot(claimant, this.chooseShotType(claimant, dist(claimant.pos, goal), 5));
+        return;
+      }
+      // otherwise a defender cuts it out — falls through to normal control
     }
 
     // (1b) A cross has come down: contest it. An attacker who wins the aerial
@@ -1592,6 +1885,8 @@ export class Match {
         hasBall: p === this.ball.owner,
         rating: this.playerRating(p),
         goals: p.stat.goals,
+        assists: p.stat.assists,
+        shots: p.stat.shots,
         fitness: Math.round(p.condition * 100),
         injured: p.injured,
       })),

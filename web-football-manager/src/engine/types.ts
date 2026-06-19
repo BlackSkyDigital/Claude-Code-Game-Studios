@@ -63,7 +63,8 @@ export interface TeamDef {
   color: string; // primary kit colour (CSS)
   textColor: string; // number colour for contrast
   formation: string; // key into FORMATIONS
-  players: PlayerDef[]; // exactly 11
+  players: PlayerDef[]; // exactly 11 (the starting XI)
+  bench?: PlayerDef[]; // substitutes available from the bench
 }
 
 /**
@@ -88,6 +89,7 @@ export type MatchEventType =
   | "foul"
   | "offside"
   | "injury"
+  | "substitution"
   | "corner"
   | "penalty"
   | "throw_in"
