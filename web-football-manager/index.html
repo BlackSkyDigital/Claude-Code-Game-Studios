@@ -174,7 +174,18 @@
               <button id="playBtn" class="ghost">Pause</button>
             </div>
             <div>
-              <label>Speed</label>
+              <label for="hlMode">Highlights</label>
+              <select id="hlMode">
+                <option value="comprehensive">Comprehensive</option>
+                <option value="extended">Extended</option>
+                <option value="key">Key Highlights</option>
+                <option value="goals">Goals Only</option>
+                <option value="full">Full Match</option>
+                <option value="commentary">Commentary Only</option>
+              </select>
+            </div>
+            <div>
+              <label>Speed (within highlights)</label>
               <div class="speeds">
                 <button class="ghost" data-speed="3">Slow</button>
                 <button class="ghost active" data-speed="6">Normal</button>

@@ -43,6 +43,7 @@ const weatherSel = $<HTMLSelectElement>("weatherSel");
 const conditionsLine = $("conditions");
 const commNow = $("commNow");
 const commPrev = $("commPrev");
+const hlSel = $<HTMLSelectElement>("hlMode");
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -97,6 +98,37 @@ const MODE_LABEL: Record<string, string> = {
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const near = (a: number, b: number): boolean => Math.abs(a - b) < 5; // <5m = real move, else a teleport
 
+// ---- highlight modes (FM-style): the sim runs the whole match, the VIEW
+// fast-forwards the dull bits and plays the chosen highlights at watch speed.
+let highlightMode = "comprehensive";
+let hiHold = 0; // seconds of "keep showing this passage" remaining
+const FF_SPEED = 48; // sim-seconds per real-second while skipping
+
+// how long a highlight lingers after a given event, by mode
+function holdFor(type: string): number {
+  const m = highlightMode;
+  if (m === "commentary" || m === "full") return 0;
+  if (type === "goal") return 4.5;
+  if (m === "goals") return 0;
+  if (type === "shot") return 3;
+  if (type === "save" || type === "block" || type === "shot_off") return 2.5;
+  if (type === "cross") return m === "comprehensive" || m === "extended" ? 2.5 : 0;
+  if (type === "key_pass") return m === "comprehensive" ? 2.5 : 0;
+  return 0;
+}
+// keep showing while the ball is in a "watch" zone for the mode
+function ballHold(snap: Snapshot): number {
+  const m = highlightMode;
+  const x = snap.ball.x;
+  if (m === "comprehensive" && (x > 66 || x < 39)) return 1.5;
+  if (m === "extended" && (x > 83 || x < 22)) return 1.2;
+  if (m === "key" && (x > 92 || x < 13)) return 1.0;
+  return 0;
+}
+const isFastForward = (): boolean =>
+  highlightMode === "commentary" ||
+  (highlightMode !== "full" && hiHold <= 0);
+
 function fillSelect(sel: HTMLSelectElement, opts: [string, string][]): void {
   sel.innerHTML = "";
   for (const [value, label] of opts) {
@@ -140,6 +172,7 @@ function newMatch(): void {
   trail.length = 0;
   flash = null;
   acc = 0;
+  hiHold = 0;
   playing = true;
   playBtn.textContent = "Pause";
   nameHome.textContent = h.short;
@@ -349,37 +382,75 @@ function processEvents(snap: Snapshot): void {
     }
     const f = FLASH[e.type];
     if (f) flash = { text: f.text, color: f.color, until: performance.now() + 1300 };
+    hiHold = Math.max(hiHold, holdFor(e.type)); // a notable event starts/extends a highlight
   }
   lastEventCount = snap.events.length;
 }
 
+function renderCommentaryOnly(): void {
+  ctx.fillStyle = "#0a0e14";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (currSnap) updateHUD(currSnap);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#6b7480";
+  ctx.font = "bold 20px system-ui, sans-serif";
+  ctx.fillText("COMMENTARY ONLY", canvas.width / 2, canvas.height / 2 - 16);
+  ctx.fillStyle = "#cfd8e3";
+  ctx.font = "14px system-ui, sans-serif";
+  ctx.fillText("Following the match via the commentary below", canvas.width / 2, canvas.height / 2 + 14);
+}
+
+function drawFFIndicator(): void {
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = "#ffce5a";
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText("⏩ skipping to next highlight", canvas.width - M - 6, M + 6);
+  ctx.globalAlpha = 1;
+}
+
 // ---- loop ----
-// Fixed-timestep simulation + interpolated rendering: real time drives the sim
-// at `timeScale`, and we render between the last two sim states for smooth,
-// broadcast-style motion that's the same on any device.
+// The sim always runs the full match; the VIEW fast-forwards between highlights
+// and plays the selected ones (by mode) at the user's watch speed, FM-style.
 function tick(now: number): void {
   requestAnimationFrame(tick);
   const dtReal = lastFrame ? (now - lastFrame) / 1000 : 0;
   lastFrame = now;
 
   if (match && playing && !match.finished) {
-    acc += Math.min(dtReal, 0.1) * timeScale;
+    const ff = isFastForward();
+    acc += Math.min(dtReal, 0.1) * (ff ? FF_SPEED : timeScale);
     let safety = 0;
-    while (acc >= STEP && !match.finished && safety < 200) {
+    while (acc >= STEP && !match.finished && safety < 800) {
       match.step();
       prevSnap = currSnap;
       currSnap = match.snapshot();
-      processEvents(currSnap);
+      processEvents(currSnap); // may bump hiHold (a chance/goal)
+      hiHold = Math.max(hiHold - STEP, ballHold(currSnap));
       acc -= STEP;
       safety++;
+      // if we were skipping and a highlight just began, stop here and play it
+      if (ff && highlightMode !== "commentary" && hiHold > 0) {
+        acc = 0;
+        break;
+      }
     }
     if (match.finished) {
       playing = false;
       playBtn.textContent = "Play";
     }
   }
-  alpha = playing ? Math.min(1, acc / STEP) : 1;
-  render();
+
+  const ffNow = isFastForward();
+  alpha = playing && !ffNow ? Math.min(1, acc / STEP) : 1;
+  if (highlightMode === "commentary") {
+    renderCommentaryOnly();
+  } else {
+    render();
+    if (playing && ffNow && !match?.finished) drawFFIndicator();
+  }
 }
 
 // ---- wiring ----
@@ -400,6 +471,10 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) 
       b.classList.toggle("active", b === btn);
   });
 }
+hlSel.addEventListener("change", () => {
+  highlightMode = hlSel.value;
+  hiHold = 0;
+});
 
 fillTeamSelects();
 newMatch();
