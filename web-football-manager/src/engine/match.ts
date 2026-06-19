@@ -179,6 +179,7 @@ export class Match {
   private buildupTimer = 0;
   private celebrateTimer = 0; // brief hold after a goal so it's seen before kick-off
   private pendingKickoff: 0 | 1 = 0;
+  private celebrateScorer: Player | null = null; // who scored (for the celebration)
   /** Diagnostic counters (pass/shot type mix) — used by the headless harness. */
   passTypeCounts: Record<PassType, number> = { feet: 0, driven: 0, through: 0, lofted: 0, chip: 0 };
   shotTypeCounts: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
@@ -358,9 +359,11 @@ export class Match {
 
   step(): void {
     if (this.finished) return;
-    // hold on the goal (ball in the net) before restarting, so it's visible
+    // hold on the goal (ball in the net) before restarting, so it's visible —
+    // and let the scorers wheel away celebrating while the ball sits in the net
     if (this.celebrateTimer > 0) {
       this.celebrateTimer -= DT;
+      this.celebrationMove();
       if (this.celebrateTimer <= 0) this.kickoff(this.pendingKickoff, false);
       return;
     }
@@ -1460,8 +1463,31 @@ export class Match {
     this.ball.owner = null;
     this.ball.vel = { x: 0, y: 0 };
     this.ball.isShot = false;
-    this.celebrateTimer = 2.0;
+    this.celebrateTimer = 2.4;
+    this.celebrateScorer = shooter ?? null;
     this.pendingKickoff = (1 - team) as 0 | 1;
+  }
+
+  /** Brief goal celebration: the scorer wheels away toward the corner and his
+   * team-mates chase to mob him, while the ball stays in the net. */
+  private celebrationMove(): void {
+    const team = this.celebrateScorer ? this.celebrateScorer.team : ((1 - this.pendingKickoff) as 0 | 1);
+    const scorer = this.celebrateScorer;
+    const goal = this.oppGoal(team);
+    // run off toward the nearer corner flag of the goal just scored at
+    const cornerY = (scorer ? scorer.pos.y : 34) < 34 ? 6 : PITCH_WIDTH - 6;
+    const runTo: Vec = { x: goal.x - (team === 0 ? 18 : -18), y: cornerY };
+    for (const p of this.players) {
+      if (p.team !== team || p.role === "GK") continue;
+      const tgt = p === scorer ? runTo : scorer ? scorer.pos : runTo;
+      const to = sub(tgt, p.pos);
+      const d = len(to);
+      if (d > 1) {
+        const dir = norm(to);
+        const stepLen = Math.min(this.effSpeed(p) * DT * 0.9, d);
+        p.pos = clampPitch({ x: p.pos.x + dir.x * stepLen, y: p.pos.y + dir.y * stepLen });
+      }
+    }
   }
 
   private shortName(team: 0 | 1): string {

@@ -593,6 +593,26 @@ function stepSim(simSeconds: number, onEvent?: () => boolean): void {
   }
 }
 
+/** After a highlight triggers, keep simulating (and buffering) until the action
+ * has fully resolved — the shot is saved/missed, or the goal is scored AND the
+ * brief celebration has played — so a clip never cuts before the ball hits the
+ * net and the players wheel away. */
+function captureClipTail(): void {
+  if (!match) return;
+  let safety = 70; // hard cap (~7s of sim) in case a scramble drags on
+  while (match && !match.finished && safety-- > 0) {
+    const bm = currSnap?.ballMode;
+    if (bm !== "shot" && bm !== "goal" && bm !== "cross") break; // play has settled
+    match.step();
+    prevSnap = currSnap;
+    currSnap = match.snapshot();
+    buffer.push(currSnap);
+    if (buffer.length > BUFFER_MAX) buffer.shift();
+    processEvents(currSnap);
+    if (clipCooldown > 0) clipCooldown--;
+  }
+}
+
 // ---- loop ----
 // FM-style: the sim runs the whole match. The view fast-forwards until a
 // qualifying EVENT (by mode threshold), then plays the buffered passage of play
@@ -607,7 +627,8 @@ function tick(now: number): void {
   if (replayClip) {
     const i0 = Math.min(Math.floor(replayPos), replayClip.length - 1);
     const cm = replayClip[i0]!.ballMode;
-    const clipPace = cm === "shot" || cm === "cross" || cm === "goal" ? timeScale * 0.4 : timeScale;
+    // slow-mo the strike & the delivery; let the goal/celebration play at normal pace
+    const clipPace = cm === "shot" || cm === "cross" ? timeScale * 0.4 : timeScale;
     replayPos += (dtReal * clipPace) / STEP;
     if (replayPos >= replayClip.length - 1) {
       replayClip = null;
@@ -631,7 +652,7 @@ function tick(now: number): void {
     const cm = currSnap?.ballMode;
     const watch = cm === "shot" || cm === "cross" ? timeScale * 0.4 : timeScale;
     stepSim(dtReal * watch, () => {
-      if (pendingReplay) { pendingReplay = false; startReplay(); return true; }
+      if (pendingReplay) { pendingReplay = false; captureClipTail(); startReplay(); return true; }
       return false;
     });
     if (replayClip) { drawScene(replayClip[0]!, replayClip[0]!, 0, true); if (currSnap) updateHUD(currSnap); return; }
@@ -649,7 +670,10 @@ function tick(now: number): void {
   // clip modes: fast-forward, watching for a qualifying event
   clipTrigger = false;
   stepSim(dtReal * skipSpeed, () => clipTrigger && clipCooldown <= 0);
-  if (clipTrigger && clipCooldown <= 0) startReplay(); // play the build-up clip
+  if (clipTrigger && clipCooldown <= 0) {
+    captureClipTail(); // play the chance out (ball in net + celebration) before the clip
+    startReplay(); // then play the build-up -> resolution clip
+  }
   if (replayClip) { drawScene(replayClip[0]!, replayClip[0]!, 0, true); if (currSnap) updateHUD(currSnap); return; }
   renderSkip(); // between highlights
 }
