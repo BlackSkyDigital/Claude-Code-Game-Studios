@@ -90,6 +90,8 @@ export interface Snapshot {
   awayStyle: string;
   weather: string;
   ball: Vec;
+  /** what the ball is doing right now: dribble / shot / cross / a pass type / loose */
+  ballMode: string;
   players: {
     x: number;
     y: number;
@@ -387,15 +389,20 @@ export class Match {
       const fwd =
         p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
       const def = p.role === "DC" || p.role === "DL" || p.role === "DR";
+      const wideRole =
+        p.role === "ML" || p.role === "MR" || p.role === "DL" || p.role === "DR";
       const line = fwd ? 1.25 : def ? 0.8 : 1.05;
       const pull = (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line;
       const lineShift = dir * (t.lineHeight - 0.5) * 24;
-      const widthFactor = 0.7 + 0.6 * t.width; // narrow .. wide
+      // wide players hold the touchline to stretch play; everyone else can be
+      // pulled toward the ball, but only gently, so the team doesn't bunch up
+      const widthFactor = (0.7 + 0.6 * t.width) * (wideRole ? 1.2 : 1.0);
+      const ballYPull = wideRole ? 0.06 : 0.14;
       // slow, per-player drift so players drift into space individually
       const drift = Math.sin(this.time * 0.45 + p.id * 1.7) * 3;
       const tx = p.base.x + (b.pos.x - CENTER.x) * pull + lineShift;
       const ty =
-        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * 0.18 + drift;
+        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + drift;
       p.target = clampPitch({
         // outfielders never retreat onto their own goal line
         x: dir > 0 ? clamp(tx, 6, PITCH_LENGTH) : clamp(tx, 0, PITCH_LENGTH - 6),
@@ -1150,6 +1157,13 @@ export class Match {
       awayStyle: this.tactics[1].style,
       weather: this.weather,
       ball: { ...this.ball.pos },
+      ballMode: this.ball.owner
+        ? "dribble"
+        : this.ball.isShot
+          ? "shot"
+          : this.ball.fromCross
+            ? "cross"
+            : (this.ball.passType ?? "loose"),
       players: this.players.map((p) => ({
         x: p.pos.x,
         y: p.pos.y,

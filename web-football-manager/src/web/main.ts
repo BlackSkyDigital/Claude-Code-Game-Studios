@@ -52,11 +52,48 @@ const Y = (y: number) => M + y * sy;
 // ---- state ----
 let match: Match | null = null;
 let playing = false;
-let timeScale = 8; // SIMULATED seconds per REAL second (frame-rate independent)
+let timeScale = 6; // SIMULATED seconds per REAL second (frame-rate independent)
 let lastFrame = 0;
 let acc = 0; // leftover simulated time not yet stepped
+let alpha = 1; // interpolation fraction between prev and curr snapshot
 let lastEventCount = 0;
 const STEP = 0.1; // must match the engine's internal DT
+
+// two snapshots so we can interpolate for smooth, TV-like motion
+let prevSnap: Snapshot | null = null;
+let currSnap: Snapshot | null = null;
+
+// fading ball trail (pixel coords) so passes/shots read as streaks
+const trail: { x: number; y: number; mode: string }[] = [];
+// on-pitch event flash (GOAL! / SAVED! / OFF TARGET)
+let flash: { text: string; color: string; until: number } | null = null;
+
+// colour the ball trail by what the ball is doing
+const MODE_COLOR: Record<string, string> = {
+  dribble: "#ffffff",
+  feet: "#a7e8ff",
+  driven: "#5ec8ff",
+  through: "#ffe27a",
+  lofted: "#ffc266",
+  chip: "#ffc266",
+  cross: "#ff9a3c",
+  shot: "#ff5a5a",
+  loose: "#cfd8e3",
+};
+const MODE_LABEL: Record<string, string> = {
+  dribble: "On the ball",
+  feet: "Pass",
+  driven: "Driven pass",
+  through: "Through ball",
+  lofted: "Lofted ball",
+  chip: "Chip",
+  cross: "Cross",
+  shot: "Shot!",
+  loose: "Loose ball",
+};
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const near = (a: number, b: number): boolean => Math.abs(a - b) < 5; // <5m = real move, else a teleport
 
 function fillSelect(sel: HTMLSelectElement, opts: [string, string][]): void {
   sel.innerHTML = "";
@@ -96,11 +133,15 @@ function newMatch(): void {
   });
   lastEventCount = 0;
   feed.innerHTML = "";
+  trail.length = 0;
+  flash = null;
+  acc = 0;
   playing = true;
   playBtn.textContent = "Pause";
   nameHome.textContent = h.short;
   nameAway.textContent = a.short;
-  draw(match.snapshot());
+  currSnap = prevSnap = match.snapshot();
+  render();
 }
 
 // ---- drawing ----
@@ -158,50 +199,116 @@ function spot(x: number, y: number): void {
   ctx.fill();
 }
 
-function draw(snap: Snapshot): void {
-  drawPitch();
-
-  // players
-  for (const p of snap.players) {
-    const px = X(p.x);
-    const py = Y(p.y);
-    if (p.hasBall) {
-      ctx.beginPath();
-      ctx.arc(px, py, 13, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,80,0.35)";
-      ctx.fill();
-    }
+function drawPlayer(px: number, py: number, p: Snapshot["players"][number]): void {
+  if (p.hasBall) {
     ctx.beginPath();
-    ctx.arc(px, py, 9, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
+    ctx.arc(px, py, 12, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,238,90,0.30)";
     ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,238,90,0.9)";
     ctx.stroke();
-    ctx.fillStyle = p.textColor;
-    ctx.font = "bold 10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(p.number), px, py);
+  }
+  ctx.beginPath();
+  ctx.arc(px, py, 8.5, 0, Math.PI * 2);
+  ctx.fillStyle = p.color;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.stroke();
+  ctx.fillStyle = p.textColor;
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(p.number), px, py);
+}
+
+function drawTrail(): void {
+  ctx.lineCap = "round";
+  for (let i = 1; i < trail.length; i++) {
+    const a = trail[i - 1]!;
+    const b = trail[i]!;
+    if (Math.hypot(b.x - a.x, b.y - a.y) > 55) continue; // skip teleports (kickoff, pickup)
+    ctx.globalAlpha = 0.08 + 0.55 * (i / trail.length);
+    ctx.strokeStyle = MODE_COLOR[b.mode] ?? "#ffffff";
+    ctx.lineWidth = b.mode === "shot" ? 4 : 3;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawFlash(): void {
+  if (!flash || performance.now() > flash.until) return;
+  const remain = (flash.until - performance.now()) / 1300;
+  ctx.globalAlpha = Math.min(1, remain * 1.4);
+  ctx.fillStyle = flash.color;
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(flash.text, canvas.width / 2, M + 40);
+  ctx.globalAlpha = 1;
+}
+
+/** Interpolated render between prevSnap and currSnap for smooth motion. */
+function render(): void {
+  if (!currSnap) return;
+  const cur = currSnap;
+  const prev = prevSnap ?? cur;
+
+  drawPitch();
+  drawTrail();
+
+  for (let i = 0; i < cur.players.length; i++) {
+    const cp = cur.players[i]!;
+    const pp = prev.players[i] ?? cp;
+    const x = near(pp.x, cp.x) ? lerp(pp.x, cp.x, alpha) : cp.x;
+    const y = near(pp.y, cp.y) ? lerp(pp.y, cp.y, alpha) : cp.y;
+    drawPlayer(X(x), Y(y), cp);
   }
 
-  // ball
+  // interpolated ball + trail point
+  const bx = near(prev.ball.x, cur.ball.x) ? lerp(prev.ball.x, cur.ball.x, alpha) : cur.ball.x;
+  const by = near(prev.ball.y, cur.ball.y) ? lerp(prev.ball.y, cur.ball.y, alpha) : cur.ball.y;
+  const px = X(bx);
+  const py = Y(by);
+  trail.push({ x: px, y: py, mode: cur.ballMode });
+  if (trail.length > 16) trail.shift();
+  if (cur.ballMode === "shot" || cur.ballMode === "cross") {
+    ctx.beginPath();
+    ctx.arc(px, py, 9, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,90,90,0.25)";
+    ctx.fill();
+  }
   ctx.beginPath();
-  ctx.arc(X(snap.ball.x), Y(snap.ball.y), 5, 0, Math.PI * 2);
+  ctx.arc(px, py, 4.5, 0, Math.PI * 2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = "#000";
   ctx.stroke();
 
-  // HUD
+  // action label (top-left of pitch) so you can tell what's happening
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = MODE_COLOR[cur.ballMode] ?? "#fff";
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(MODE_LABEL[cur.ballMode] ?? "", M + 6, M + 6);
+  ctx.globalAlpha = 1;
+
+  drawFlash();
+  updateHUD(cur);
+}
+
+function updateHUD(snap: Snapshot): void {
   scoreHome.textContent = String(snap.score[0]);
   scoreAway.textContent = String(snap.score[1]);
   shotsLine.textContent = `Shots ${snap.shots[0]} – ${snap.shots[1]}`;
   const mm = String(Math.floor(snap.minute)).padStart(2, "0");
   clockEl.textContent = snap.finished ? "FT" : `${mm}'`;
-
-  // match stats
   for (const i of [0, 1] as const) {
     stPoss[i].textContent = `${snap.possession[i]}%`;
     stShots[i].textContent = String(snap.shots[i]);
@@ -212,52 +319,60 @@ function draw(snap: Snapshot): void {
   conditionsLine.textContent =
     `${styleLabel(snap.homeStyle as TacticalStyle)}  ·  ${weatherLabel(snap.weather as Weather)}  ·  ` +
     `${styleLabel(snap.awayStyle as TacticalStyle)}`;
+}
 
-  // commentary (append only new events)
-  if (snap.events.length > lastEventCount) {
-    const shown = new Set([
-      "goal",
-      "save",
-      "shot_off",
-      "interception",
-      "tackle",
-      "kickoff",
-      "half_time",
-      "full_time",
-    ]);
-    for (let i = lastEventCount; i < snap.events.length; i++) {
-      const e = snap.events[i]!;
-      if (!shown.has(e.type)) continue;
-      const row = document.createElement("div");
-      row.className = `ev ev-${e.type}`;
-      row.textContent = `${e.minute}'  ${e.text}`;
-      feed.prepend(row);
-    }
-    lastEventCount = snap.events.length;
+const FLASH: Record<string, { text: string; color: string }> = {
+  goal: { text: "⚽  GOAL!", color: "#7ef08a" },
+  save: { text: "🧤  SAVED!", color: "#7ec8ff" },
+  shot_off: { text: "↗  OFF TARGET", color: "#ffce5a" },
+};
+
+function processEvents(snap: Snapshot): void {
+  if (snap.events.length <= lastEventCount) return;
+  const shown = new Set([
+    "goal", "save", "shot_off", "interception", "tackle",
+    "kickoff", "half_time", "full_time",
+  ]);
+  for (let i = lastEventCount; i < snap.events.length; i++) {
+    const e = snap.events[i]!;
+    if (!shown.has(e.type)) continue;
+    const row = document.createElement("div");
+    row.className = `ev ev-${e.type}`;
+    row.textContent = `${e.minute}'  ${e.text}`;
+    feed.prepend(row);
+    const f = FLASH[e.type];
+    if (f) flash = { text: f.text, color: f.color, until: performance.now() + 1300 };
   }
+  lastEventCount = snap.events.length;
 }
 
 // ---- loop ----
-// Fixed-timestep playback: real elapsed time drives how many 0.1s sim steps we
-// run, so the match plays at the same pace on any device regardless of frame
-// rate (a 120Hz phone no longer runs it at double speed).
+// Fixed-timestep simulation + interpolated rendering: real time drives the sim
+// at `timeScale`, and we render between the last two sim states for smooth,
+// broadcast-style motion that's the same on any device.
 function tick(now: number): void {
   requestAnimationFrame(tick);
   const dtReal = lastFrame ? (now - lastFrame) / 1000 : 0;
   lastFrame = now;
-  if (!match || !playing || match.finished) return;
 
-  acc += Math.min(dtReal, 0.1) * timeScale; // clamp to avoid jumps after pauses
-  let steps = Math.floor(acc / STEP);
-  acc -= steps * STEP;
-  steps = Math.min(steps, 60); // safety cap
-  for (let i = 0; i < steps && !match.finished; i++) match.step();
-
-  draw(match.snapshot());
-  if (match.finished) {
-    playing = false;
-    playBtn.textContent = "Play";
+  if (match && playing && !match.finished) {
+    acc += Math.min(dtReal, 0.1) * timeScale;
+    let safety = 0;
+    while (acc >= STEP && !match.finished && safety < 200) {
+      match.step();
+      prevSnap = currSnap;
+      currSnap = match.snapshot();
+      processEvents(currSnap);
+      acc -= STEP;
+      safety++;
+    }
+    if (match.finished) {
+      playing = false;
+      playBtn.textContent = "Play";
+    }
   }
+  alpha = playing ? Math.min(1, acc / STEP) : 1;
+  render();
 }
 
 // ---- wiring ----
