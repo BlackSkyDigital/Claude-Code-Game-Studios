@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Word Search &amp; Definitions</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Word Search</h1>
+      <p class="tagline">Find the words &mdash; then click any word to learn its meaning and history.</p>
+    </header>
+
+    <main class="layout">
+      <section class="board-panel">
+        <div class="board-controls">
+          <label for="puzzle-select">Puzzle:</label>
+          <select id="puzzle-select" aria-label="Choose a puzzle"></select>
+          <button id="new-game" type="button">New Game</button>
+        </div>
+        <div id="grid" class="grid" role="grid" aria-label="Word search grid"></div>
+        <p id="status" class="status" aria-live="polite"></p>
+      </section>
+
+      <aside class="side-panel">
+        <div class="words-block">
+          <h2>Words to Find</h2>
+          <p class="hint">Tip: click a word below (or a found word in the grid) to see its definition &amp; history.</p>
+          <ul id="word-list" class="word-list"></ul>
+        </div>
+
+        <div id="info-card" class="info-card" aria-live="polite">
+          <p class="info-empty">Select a word to reveal its definition and history.</p>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="app-footer">
+      <span>Drag across letters to select a word. Works forwards, backwards, and diagonally.</span>
+    </footer>
+
+    <script src="words.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
