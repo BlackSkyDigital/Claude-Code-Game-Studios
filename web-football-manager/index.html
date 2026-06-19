@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Football Manager — 2D Match Engine</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --panel: #161b22;
+        --line: #283040;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #2f8f3f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      header {
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+      header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+      .wrap {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 16px;
+        padding: 16px 20px;
+        align-items: start;
+      }
+      @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+
+      .scoreboard {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 16px;
+        margin-bottom: 12px;
+      }
+      .scoreboard .team { font-weight: 700; font-size: 18px; width: 60px; }
+      .scoreboard .team.away { text-align: right; }
+      .scoreboard .score { font-size: 30px; font-weight: 800; letter-spacing: 2px; }
+      .scoreboard .clock {
+        background: #000; color: #5dd56a; font-variant-numeric: tabular-nums;
+        padding: 2px 10px; border-radius: 6px; font-weight: 700; min-width: 52px;
+        text-align: center;
+      }
+      .shots { text-align: center; color: var(--muted); font-size: 12px; margin-top: -6px; margin-bottom: 10px; }
+
+      canvas {
+        width: 100%; height: auto; display: block;
+        border: 1px solid var(--line); border-radius: 10px;
+        background: #2a8438;
+      }
+
+      .panel {
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: 10px; padding: 14px;
+      }
+      .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+        color: var(--muted); margin: 0 0 10px; }
+      .controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+      label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+      select, input {
+        width: 100%; background: #0d1117; color: var(--text);
+        border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 13px;
+      }
+      .row { display: flex; gap: 8px; }
+      .row > * { flex: 1; }
+      button {
+        background: var(--accent); color: #fff; border: none; border-radius: 6px;
+        padding: 8px 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+      }
+      button.ghost { background: #21262d; }
+      button.active { outline: 2px solid #5dd56a; }
+      .speeds { display: flex; gap: 6px; }
+      .speeds button { flex: 1; }
+
+      #feed { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+      .ev { font-size: 12px; padding: 5px 8px; border-radius: 5px; background: #0d1117;
+        border-left: 3px solid var(--line); }
+      .ev-goal { border-left-color: #5dd56a; font-weight: 700; color: #9af2a6; }
+      .ev-save { border-left-color: #58a6ff; }
+      .ev-shot_off { border-left-color: #d29922; }
+      .ev-interception, .ev-tackle { border-left-color: #8b949e; color: var(--muted); }
+      .ev-half_time, .ev-full_time, .ev-kickoff { border-left-color: #f0f6fc; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>⚽ Web Football Manager — 2D Match Engine</h1>
+      <p>Deterministic, seeded match simulation rendered top-down. Increment 1 of the private 3-player project.</p>
+    </header>
+
+    <div class="wrap">
+      <div>
+        <div class="scoreboard">
+          <span class="team home" id="nameHome">HOM</span>
+          <span class="score"><span id="scoreHome">0</span> : <span id="scoreAway">0</span></span>
+          <span class="team away" id="nameAway">AWY</span>
+          <span class="clock" id="clock">00'</span>
+        </div>
+        <div class="shots" id="shots">Shots 0 – 0</div>
+        <canvas id="pitch" width="960" height="640"></canvas>
+      </div>
+
+      <div>
+        <div class="panel">
+          <h2>Match Setup</h2>
+          <div class="controls">
+            <div>
+              <label for="homeSel">Home</label>
+              <select id="homeSel"></select>
+            </div>
+            <div>
+              <label for="awaySel">Away</label>
+              <select id="awaySel"></select>
+            </div>
+            <div>
+              <label for="seed">Seed (same seed = same match)</label>
+              <input id="seed" type="number" value="7" />
+            </div>
+            <div class="row">
+              <button id="newBtn">New Match</button>
+              <button id="playBtn" class="ghost">Pause</button>
+            </div>
+            <div>
+              <label>Speed</label>
+              <div class="speeds">
+                <button class="ghost" data-speed="3">1×</button>
+                <button class="ghost active" data-speed="6">2×</button>
+                <button class="ghost" data-speed="12">4×</button>
+                <button class="ghost" data-speed="30">⏩</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Commentary</h2>
+          <div id="feed"></div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="dist/web/main.js"></script>
+  </body>
+</html>

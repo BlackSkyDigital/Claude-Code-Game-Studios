@@ -1,0 +1,13 @@
+{
+  "name": "web-football-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private web-based football manager with a 2D aerial match engine, async 3-player online seasons.",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "serve": "python3 -m http.server 8080",
+    "simtest": "tsc && node dist/engine/simtest.js"
+  }
+}
