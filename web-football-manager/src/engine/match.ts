@@ -1300,8 +1300,10 @@ export class Match {
       const aerial = (p.attrs.heading + p.attrs.jumpingReach) / 2;
       // reward the player who's actually free (back-post winger, arriving
       // midfielder) rather than always hammering it at the central striker
-      // the striker is the focal point in the box — aim for him a bit more
-      const focal = p.role === "ST" ? 5 : p.role === "AM" ? 2 : 0;
+      // the striker is the focal point in the box — aim for him a bit more; a
+      // late-arriving attacking midfielder is a real threat at the back post too
+      const focal =
+        p.role === "ST" ? 5 : p.role === "AM" ? 3 : p.role === "MC" && p.duty === "attack" ? 3 : 0;
       const score =
         central * 7 + openness * 1.6 + aerial * 0.4 + p.attrs.offTheBall * 0.15 + focal - dist(p.pos, goal) * 0.18;
       if (score > bestScore) {
