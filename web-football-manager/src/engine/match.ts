@@ -931,7 +931,7 @@ export class Match {
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
           if (phase < (eager ? 0.45 : 0.65)) continue;
-          const depth = lateRunner ? 2 : 5 + p.attrs.offTheBall * 0.2;
+          const depth = lateRunner ? 1 : 2 + p.attrs.offTheBall * 0.12;
           const targetX = clamp(lineX + adir * depth, lo, hi);
           // wide players hold a wider line (back-post threat); others come central
           const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
@@ -1083,7 +1083,7 @@ export class Match {
       const closeness = Math.max(0, 1 - dGoal / 24);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
       const inBox = this.inBoxAttacking(owner);
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.011;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.008;
       // close to goal a striker shoots even under pressure; only heavily penalise
       // being crowded out from range
       if (space < 2.5) shotProb *= dGoal < 11 ? 0.8 : 0.5;
@@ -1095,7 +1095,7 @@ export class Match {
       if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
       // IN THE BOX: more willing to shoot (a multiplier, not a flat floor — so it
       // scales with how good the chance is and doesn't spray shots while dwelling)
-      if (inBox) shotProb *= 2.4;
+      if (inBox) shotProb *= 1.7;
       goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
@@ -1154,7 +1154,7 @@ export class Match {
     if (pass) {
       // pass mainly when pressured; in space, carry the ball forward instead of
       // tapping it sideways (cuts the ping-pong, makes build-up progressive)
-      let passProb = 0.25 + 0.42 * (1 - Math.min(1, space / 6));
+      let passProb = 0.2 + 0.42 * (1 - Math.min(1, space / 6));
       if (goodChance) passProb *= 0.4;
       // in the box, don't pass it square — back yourself to shoot / cut it back /
       // beat the man (a true cut-back to an arriving runner is still allowed, but
@@ -1465,16 +1465,18 @@ export class Match {
     let typeErr: number; // base difficulty multiplier
     let air = 0; // airborne time (lofted/chip beat the ground press)
     switch (type) {
+      // speeds are crisp on purpose: a ball spending too long travelling reads as
+      // "pinball". Real passes zip — keep air time short.
       case "feet": // safe, to the receiver's feet
-        lead = 0; speed = 12 + d * 0.3; typeErr = 0.8; break;
+        lead = 0; speed = 17 + d * 0.45; typeErr = 0.8; break;
       case "driven": // fast and low, into feet, to progress at pace
-        lead = 1; speed = 17 + d * 0.45; typeErr = 1.0; break;
+        lead = 1; speed = 23 + d * 0.55; typeErr = 1.0; break;
       case "through": // lead into space behind the line for a runner
-        lead = 7 + Math.min(8, this.spaceAhead(target) * 0.4); speed = 15 + d * 0.4; typeErr = 1.4; break;
+        lead = 7 + Math.min(8, this.spaceAhead(target) * 0.4); speed = 20 + d * 0.5; typeErr = 1.4; break;
       case "lofted": // over the top / switch — flies over ground defenders
-        lead = 6; speed = 15 + d * 0.35; typeErr = 1.5; air = Math.min(1.4, d / 22); break;
+        lead = 6; speed = 19 + d * 0.45; typeErr = 1.5; air = Math.min(1.0, d / 28); break;
       case "chip": // dink over a nearby defender, short
-        lead = 4; speed = 12 + d * 0.3; typeErr = 1.7; air = 0.5; break;
+        lead = 4; speed = 15 + d * 0.35; typeErr = 1.7; air = 0.4; break;
     }
     aimPoint = {
       x: target.pos.x + goalDir.x * lead,
@@ -1505,8 +1507,10 @@ export class Match {
     b.vel = { x: dir.x * speed, y: dir.y * speed };
     // OFFSIDE: a forward ball played to a teammate who has strayed beyond the
     // second-last defender is flagged — judged when he plays it (resolveLooseBall)
+    // only balls played INTO SPACE behind the line can be offside — a driven ball
+    // to feet in front of the defence isn't, and flagging it inflated offsides
     b.offsideFlag =
-      (type === "through" || type === "lofted" || type === "driven") && this.isOffside(target, passer)
+      (type === "through" || type === "lofted") && this.isOffside(target, passer)
         ? target.team
         : null;
     // only narrate genuinely dangerous through balls (final third, occasionally)
@@ -1542,7 +1546,7 @@ export class Match {
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
         speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
     }
-    let spread = ((1 - shootAttr / 20) * 4.8 + 2.2 + dGoal * 0.1 + pressure + this.wx.shotScatter) * spreadMul;
+    let spread = ((1 - shootAttr / 20) * 4.3 + 2.0 + dGoal * 0.08 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);
@@ -1693,7 +1697,7 @@ export class Match {
       const d = len(toTarget);
       if (d > 0.01) {
         const sp = this.effSpeed(p);
-        const cap = (p === this.ball.owner ? sp * 0.82 : sp) * DT;
+        const cap = (p === this.ball.owner ? sp * 0.9 : sp) * DT;
         const stepLen = Math.min(cap, d);
         const dir = norm(toTarget);
         p.pos = clampPitch({
@@ -1777,7 +1781,7 @@ export class Match {
             gk.stat.saves++;
             this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
             // a hard shot is often parried behind for a corner rather than held
-            if (this.rng.chance(0.45)) this.concedeCorner(shooter.team);
+            if (this.rng.chance(0.55)) this.concedeCorner(shooter.team);
             else this.claim(gk);
           }
           // if beaten: leave it — the goal is recorded (and counted) at the line
@@ -1862,7 +1866,7 @@ export class Match {
         claimant.stat.blocks++;
         this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
         // a block often deflects behind for a corner
-        if (this.rng.chance(0.5) && b.shooter) this.concedeCorner(b.shooter.team);
+        if (this.rng.chance(0.62) && b.shooter) this.concedeCorner(b.shooter.team);
         else this.claim(claimant);
       }
       return;

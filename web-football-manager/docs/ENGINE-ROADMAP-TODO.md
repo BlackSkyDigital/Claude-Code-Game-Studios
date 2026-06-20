@@ -34,10 +34,25 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Smaller fixes / polish
 
-- [ ] On-target % is low (~23% vs ~33% real) — lots of speculative wide shots
-  from the spread-out chance distribution. Trim shot scatter / wayward efforts.
+- [~] On-target % low (~25%) — tightened shot scatter; remaining lowness is
+  partly defenders blocking more shots now (realistic). Revisit if it looks off.
 - [ ] Pass count per match is high (~2.7k) — tempo reads as busy; consider longer
   on-ball holds without hurting shot/goal calibration.
+- [~] Corners dipped when attackers started shooting instead of crossing —
+  bumped concede rates back up (~3.4/match); could lift further.
+- [ ] Goal distribution still striker-heavy (~76%); wingers ~24%, midfielders
+  rarely score. Needs arriving-midfield runners finishing cut-backs/crosses.
+
+## Diagnostics (so we stop tuning blind)
+
+`tools/stats.mjs` reports ball OWNED vs IN-FLIGHT vs LOOSE % and possession
+length; `tools/viz.mjs` renders ASCII pitch frames of a real passage so the
+positioning/shape/movement can be inspected without the browser. Run from
+`tools/` after `npx tsc`. **This is how we diagnose "doesn't feel right".**
+
+Key finding: the ball was IN FLIGHT ~47% of the match (pinball feel); crisper,
+faster passes + carrying more brought it to ~37% (real ~25-30%). Still room to
+carry more / pass less.
 
 ## Calibration baseline to protect (headless, ~40 matches)
 
