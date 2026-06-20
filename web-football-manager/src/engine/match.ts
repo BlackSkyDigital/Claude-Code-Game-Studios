@@ -1236,8 +1236,8 @@ export class Match {
       let type: PassType;
       if (advancement > 9 && spaceAhead > (killer ? 8 : 11) && this.rng.chance(sees * (killer ? 0.85 : 0.55))) {
         type = "through"; // a runner with clear space behind the line (vision)
-      } else if (d > 26 && (lateral > 22 || advancement > 14) && this.rng.chance(0.3 + sees * 0.4)) {
-        type = "lofted"; // switch play or beat a high line over the top
+      } else if (d > 30 && (lateral > 26 || advancement > 16) && this.rng.chance(0.18 + sees * 0.25)) {
+        type = "lofted"; // a genuine switch / over-the-top — kept rarer (it hangs)
       } else if (space < 2 && d < 11 && this.rng.chance(oa.flair / 30)) {
         type = "chip"; // tight space, dink it over the press (risky, flair)
       } else if (d > 15 && D > 0.35) {
@@ -1878,7 +1878,7 @@ export class Match {
     const ca = claimant.attrs;
     const controlAttr =
       claimant.role === "GK" ? ca.handling : (ca.firstTouch + ca.technique) / 2;
-    let controlProb = (0.55 + controlAttr / 45) * this.sharp(claimant);
+    let controlProb = (0.56 + controlAttr / 45) * this.sharp(claimant);
     if (claimant.role !== "GK") {
       const presser = this.nearestOutfield((1 - claimant.team) as 0 | 1, b.pos);
       if (presser && dist(presser.pos, b.pos) < 2.5) {

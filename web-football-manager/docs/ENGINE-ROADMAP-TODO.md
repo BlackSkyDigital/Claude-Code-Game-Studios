@@ -51,8 +51,17 @@ positioning/shape/movement can be inspected without the browser. Run from
 `tools/` after `npx tsc`. **This is how we diagnose "doesn't feel right".**
 
 Key finding: the ball was IN FLIGHT ~47% of the match (pinball feel); crisper,
-faster passes + carrying more brought it to ~37% (real ~25-30%). Still room to
-carry more / pass less.
+faster passes + carrying more brought it to ~37%, then cutting the hangy lofted
+balls took it to ~34% with pass completion up to ~81% (real ~25-30%).
+
+Levers TESTED and rejected (kept here so we don't repeat them):
+- Slowing the decision cadence — the carrier dwells under pressure, so fouls &
+  cards explode (27 fouls, 0.8 reds) and shots crash. Bad lever.
+- Lowering pass probability to "carry more" — trades passes for take-ons/dribbles
+  at goal, inflating fouls & goals. Bad lever.
+- Raising pass control — interceptions from the new lane-blocking defenders cap
+  completion ~80%, so it barely moved (and nudged box fouls up).
+- What worked: faster/crisper passes + fewer lofted balls.
 
 ## Calibration baseline to protect (headless, ~40 matches)
 
