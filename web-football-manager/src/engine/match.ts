@@ -316,14 +316,14 @@ export class Match {
 
   private setupPlayers(): void {
     let id = 0;
-    const mk = (pd: PlayerDef, teamIdx: 0 | 1, base: Vec, startCond: number, starter: boolean): Player => {
+    const mk = (pd: PlayerDef, teamIdx: 0 | 1, base: Vec, startCond: number, starter: boolean, role: Role = pd.role): Player => {
       const a = pd.attrs;
       return {
         id: id++,
         team: teamIdx,
         name: pd.name,
         number: pd.number,
-        role: pd.role,
+        role,
         attrs: a,
         color: teamIdx === 0 ? this.home.color : this.away.color,
         textColor: teamIdx === 0 ? this.home.textColor : this.away.textColor,
@@ -341,8 +341,8 @@ export class Match {
         starter,
         markName: pd.instructions?.mark ?? null,
         tightMark: pd.instructions?.tightMark ?? false,
-        duty: pd.duty ?? defaultDuty(pd.role),
-        roleName: roleLabel(pd.role, pd.duty ?? defaultDuty(pd.role), new Set(pd.traits ?? [])),
+        duty: pd.duty ?? defaultDuty(role),
+        roleName: roleLabel(role, pd.duty ?? defaultDuty(role), new Set(pd.traits ?? [])),
         stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
       };
     };
@@ -354,7 +354,9 @@ export class Match {
       def.players.forEach((pd, i) => {
         const slot = slots[i]!;
         const base = teamIdx === 0 ? { ...slot.pos } : mirror(slot.pos);
-        this.players.push(mk(pd, teamIdx, base, startCond, true));
+        // the formation slot defines the role the player fills (so changing
+        // formation genuinely changes how the side lines up and behaves)
+        this.players.push(mk(pd, teamIdx, base, startCond, true, slot.role));
       });
       // build the bench (kept off the pitch until brought on)
       for (const pd of def.bench ?? []) {
@@ -1109,7 +1111,7 @@ export class Match {
       if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
       // IN THE BOX with at least half a yard: more willing to shoot (a multiplier,
       // scaled by chance quality — but a crowded player still won't blaze it)
-      if (inBox && space > 2.2) shotProb *= 1.85;
+      if (inBox && space > 2.2) shotProb *= 1.55;
       goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
