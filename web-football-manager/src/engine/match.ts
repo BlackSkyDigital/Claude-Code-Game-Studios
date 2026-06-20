@@ -420,7 +420,7 @@ export class Match {
     this.foulCount++;
     // a foul in the box is a penalty most (not all) of the time — some are
     // adjudged just outside the area or the attacker shields it out
-    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.35);
+    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.24);
     this.maybeCard(fouler, victim, pen);
     if (pen) {
       this.awardPenalty(victim.team);
@@ -487,12 +487,12 @@ export class Match {
    * reckless challenge is a red and the player is sent off. */
   private maybeCard(fouler: Player, victim: Player, isPen: boolean): void {
     const dangerous = this.inFinalThird(victim) || isPen;
-    if (dangerous && this.rng.chance(0.008)) {
+    if (dangerous && this.rng.chance(0.004)) {
       this.sendOff(fouler, true);
       return;
     }
-    let yellowP = 0.07 + fouler.attrs.aggression / 160;
-    if (dangerous) yellowP += 0.1; // stopping a promising move
+    let yellowP = 0.055 + fouler.attrs.aggression / 200;
+    if (dangerous) yellowP += 0.08; // stopping a promising move
     if (this.rng.chance(yellowP)) {
       if (fouler.yellow) this.sendOff(fouler, false);
       else {
@@ -941,6 +941,37 @@ export class Match {
       }
       if (sx !== 0 || sy !== 0) {
         p.target = clampPitch({ x: p.target.x + sx * 2.5, y: p.target.y + sy * 2.5 });
+      }
+    }
+
+    // Getting open: attacking players whose team has the ball peel off their
+    // marker into space to make themselves available — better movers do it more.
+    // This is what turns a static block into players "showing" for a pass.
+    if (possTeam !== null && b.owner) {
+      for (const p of this.players) {
+        if (p.team !== possTeam || p === b.owner || p.role === "GK") continue;
+        const attacker =
+          p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML" || p.role === "MC";
+        if (!attacker) continue;
+        const marker = this.nearestOutfield((1 - possTeam) as 0 | 1, p.pos);
+        if (marker && dist(marker.pos, p.pos) < 5.5) {
+          // step away from the marker, toward the freer side, scaled by movement
+          const away = norm(sub(p.pos, marker.pos));
+          const mag = 1.4 + (p.attrs.offTheBall / 20) * 1.8;
+          p.target = clampPitch({ x: p.target.x + away.x * mag, y: p.target.y + away.y * mag });
+        }
+      }
+
+      // Overlap: an attack-duty full-back bombs on past the winger ahead of him,
+      // hugging the touchline to stretch the pitch and offer a wide outlet.
+      for (const fb of this.players) {
+        if (fb.team !== possTeam || (fb.role !== "DL" && fb.role !== "DR") || fb.duty !== "attack") continue;
+        const adir = possTeam === 0 ? 1 : -1;
+        const ballAdvanced = adir > 0 ? b.pos.x > 50 : b.pos.x < 55;
+        if (!ballAdvanced) continue;
+        const touchY = fb.base.y < 34 ? 6 : PITCH_WIDTH - 6; // his flank's touchline
+        const overlapX = clamp(b.pos.x + adir * 8, 12, PITCH_LENGTH - 12);
+        fb.target = clampPitch({ x: overlapX, y: touchY });
       }
     }
   }
