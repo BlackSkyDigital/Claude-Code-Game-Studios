@@ -77,6 +77,31 @@ structural pass rather than rushed. Grounding ratings in real API data
 (`tools/fetch-real.mjs`, once the host is allowlisted) would also help, since
 some of the concentration is squad-rating driven (one elite winger per top team).
 
+### Update — chance-creation rework attempted (and why it was reverted)
+
+The rework above was implemented and measured: central midfielders make timed
+runs *into* the box, `choosePass` strongly prefers an onrushing midfielder, and a
+forward in the box lays it off to him (`bestMidCutback`) before taking his own
+shot. Outcome over 3 seasons:
+
+- **Worked:** midfield goal share 3% → ~7-8%, wide forwards 58% → ~49%,
+  goals/game 2.7 → **2.84** (bang on real ~2.82), and 17th/20th landmarks improved.
+- **Didn't work:** the **golden boot got slightly worse (~44)** — lifting overall
+  scoring raised the top scorer too, and the lay-off doesn't fire often enough to
+  pull the elite winger/striker down. It also **destabilised the table** (pacey
+  transition sides like Newcastle/Wolves jumped into the top 5 because the extra
+  box runs and lay-offs flatter them).
+
+So the rework improved the *distribution and scoring rate* but not the headline
+golden-boot number, at the cost of table realism — a net regression — and was
+reverted to keep the calibrated stable state. The conclusion: the top-scorer
+concentration is driven more by **squad-rating spread (one clearly-best attacker
+per top side) and the spatial chance-funnel** than by where the goals nominally
+come from. The two viable fixes are therefore (a) **real squad ratings via the
+API** (real attribute spreads are more compressed than these hand estimates, so
+chances spread across more players), and (b) a deeper positional-play rewrite that
+changes *who carries the ball into shooting positions*, not just who finishes.
+
 ## Grounding in real data (API-Football)
 
 `tools/fetch-real.mjs` is ready to pull real standings/top-scorers/squads to tune
