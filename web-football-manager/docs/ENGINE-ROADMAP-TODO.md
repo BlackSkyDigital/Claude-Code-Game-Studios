@@ -22,6 +22,16 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] **5. Morale / momentum** — confidence & momentum context that nudges
   sharpness within a match.
 
+## Attack/defence behaviour in & around the box (done)
+
+- [x] **Attackers back themselves in the box** — shoot (or take-on / cut-back /
+  dribble around) instead of passing it square away; in-box shooting is a
+  quality-scaled multiplier and square lay-offs are discouraged.
+- [x] **Defenders engage, don't sit** — at least two close down in the
+  defensive third regardless of pressing tactic, and a spare centre-back drops
+  into the ball→runner lane to cut the through ball. (Side effect: a higher line
+  means a few more offsides — realistic.)
+
 ## Smaller fixes / polish
 
 - [ ] On-target % is low (~23% vs ~33% real) — lots of speculative wide shots

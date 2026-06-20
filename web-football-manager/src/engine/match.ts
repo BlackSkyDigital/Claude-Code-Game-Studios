@@ -781,7 +781,15 @@ export class Match {
       const ownGoalX = defTeam === 0 ? 0 : PITCH_LENGTH;
       const ballDepth = Math.abs(b.pos.x - ownGoalX);
       const engageRange = 35 + dT.pressing * 60 + dT.lineHeight * 15;
-      const closers = ballDepth < engageRange ? 1 + Math.round(dT.pressing * 2) : 1;
+      // in the defensive third the side MUST engage regardless of pressing
+      // tactic — you don't let a man stroll into your box. At least two close
+      // down (the presser + a cover), more with a high press.
+      const inDanger = ballDepth < 30;
+      const closers = inDanger
+        ? Math.max(2, 1 + Math.round(dT.pressing * 2))
+        : ballDepth < engageRange
+          ? 1 + Math.round(dT.pressing * 2)
+          : 1;
       const pressers: Player[] = [];
       for (let i = 0; i < closers; i++) {
         const d = this.nearestOutfield(defTeam, b.pos, pressers);
@@ -846,6 +854,31 @@ export class Match {
           marker.target = clampPitch({ x: att.pos.x + toGoal.x * tight, y: att.pos.y + toGoal.y * tight });
         }
       }
+
+      // CUT THE PASSING LANE: a spare central defender drops into the line
+      // between the ball and the most dangerous central runner, to read and
+      // intercept the through ball rather than just retreating.
+      const runner = this.players
+        .filter((p) => p.team === possTeam && p.role !== "GK" && this.isThreat(p, possTeam))
+        .sort((a, c) => dist(a.pos, protectGoal) - dist(c.pos, protectGoal))[0];
+      if (runner) {
+        const cover = this.players.find(
+          (p) =>
+            p.team === defTeam &&
+            (p.role === "DC" || p.role === "DM") &&
+            !pressers.includes(p) &&
+            !marked.has(p),
+        );
+        if (cover) {
+          const lane: Vec = {
+            x: b.pos.x + (runner.pos.x - b.pos.x) * 0.45,
+            y: b.pos.y + (runner.pos.y - b.pos.y) * 0.45,
+          };
+          cover.target = clampPitch(lane);
+          marked.add(cover);
+        }
+      }
+
       // Support play: the nearest teammates take up angles around the carrier
       // to form passing triangles (two ahead in the half-spaces, one behind to
       // recycle) — this is what lets possession progress through the thirds.
@@ -1049,16 +1082,21 @@ export class Match {
       // range, but not so generous that junk shots pile up while dwelling
       const closeness = Math.max(0, 1 - dGoal / 24);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
+      const inBox = this.inBoxAttacking(owner);
       let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.011;
-      if (space < 2.5) shotProb *= 0.5; // crowded out
+      // close to goal a striker shoots even under pressure; only heavily penalise
+      // being crowded out from range
+      if (space < 2.5) shotProb *= dGoal < 11 ? 0.8 : 0.5;
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
-      // floors fire only when genuinely UNMARKED (space-gated) so they don't
-      // pile up while a striker dwells closely marked in the box
+      // unmarked floors (space-gated) — a clear sight of goal
       if (dGoal < 14 && angle > 0.6 && space > 6) shotProb = Math.max(shotProb, 0.08);
-      if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16); // big chance
-      goodChance = closeness * angle > 0.35;
+      if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
+      // IN THE BOX: more willing to shoot (a multiplier, not a flat floor — so it
+      // scales with how good the chance is and doesn't spray shots while dwelling)
+      if (inBox) shotProb *= 2.4;
+      goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
         return;
@@ -1118,6 +1156,10 @@ export class Match {
       // tapping it sideways (cuts the ping-pong, makes build-up progressive)
       let passProb = 0.25 + 0.42 * (1 - Math.min(1, space / 6));
       if (goodChance) passProb *= 0.4;
+      // in the box, don't pass it square — back yourself to shoot / cut it back /
+      // beat the man (a true cut-back to an arriving runner is still allowed, but
+      // the safe lay-off is heavily discouraged)
+      if (this.inBoxAttacking(owner) && dist(pass.target.pos, goal) > dGoal - 2) passProb *= 0.55;
       if (this.rng.chance(passProb)) {
         this.executePass(owner, pass.target, pass.type);
         return;
