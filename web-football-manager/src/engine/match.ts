@@ -107,7 +107,14 @@ interface Ball {
   judged: boolean; // whether the current shot has already been adjudicated
   cooldown: number; // seconds during which the ball cannot be controlled
   offsideFlag: 0 | 1 | null; // team flagged offside on the in-flight pass, if any
+  chance: ChanceType; // how the current shot's chance was created (for review/diagnostics)
+  deflected: boolean; // the in-flight shot took a deflection (wrong-foots the keeper)
 }
+
+/** How a shot's chance arose — used for the goal-source review (are goals mixed?). */
+export type ChanceType =
+  | "open" | "through" | "cross" | "cutback" | "solo" | "setpiece"
+  | "penalty" | "rebound" | "deflected" | "owngoal";
 
 /** Rendering snapshot — everything the view needs, nothing it doesn't. */
 export interface Snapshot {
@@ -264,6 +271,11 @@ export class Match {
   subsMade = 0;
   shotDist: number[] = []; // diagnostic: distance-to-goal of each shot
   shotSideByTeam: [number[], number[]] = [[], []]; // y-offset (+=right of centre) of each shot, by team
+  /** review diagnostics: how goals are created, and shot outcomes. */
+  goalsByChance: Record<ChanceType, number> = { open: 0, through: 0, cross: 0, cutback: 0, solo: 0, setpiece: 0, penalty: 0, rebound: 0, deflected: 0, owngoal: 0 };
+  goalsByShot: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
+  shotOutcomes = { goal: 0, saved: 0, blocked: 0, offtarget: 0, woodwork: 0 };
+  handballs = 0; freeKicks = 0; deflections = 0; ownGoals = 0;
   private bench: [Player[], Player[]] = [[], []];
   private subsUsed: [number, number] = [0, 0];
   private static MAX_SUBS = 5;
@@ -322,6 +334,8 @@ export class Match {
       judged: false,
       cooldown: 0,
       offsideFlag: null,
+      chance: "open",
+      deflected: false,
     };
     this.kickoff(0, true);
   }
@@ -505,10 +519,28 @@ export class Match {
     this.foulCount++;
     // a foul in the box is a penalty most (not all) of the time — some are
     // adjudged just outside the area or the attacker shields it out
-    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.19);
+    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.12);
     this.maybeCard(fouler, victim, pen);
     if (pen) {
       this.awardPenalty(victim.team);
+      return;
+    }
+    // a foul in a dangerous attacking area becomes a real set-piece, not just a
+    // quick restart: a direct free-kick shot if central & in range, otherwise a
+    // whipped cross into the box. Deeper fouls are taken quickly (below).
+    const goal = this.oppGoal(victim.team);
+    const dG = dist(victim.pos, goal);
+    const central = Math.abs(victim.pos.y - 34) < 13;
+    const attHalf = victim.team === 0 ? victim.pos.x > 58 : victim.pos.x < 47;
+    if (this.crng.chance(0.5)) {
+      this.emit("foul", fouler.team, fouler.name, this.vary([`Foul by ${fouler.name}.`, `${fouler.name} gives away a free kick.`, `Free kick — ${fouler.name} caught him late.`]));
+    }
+    if (dG > 17 && dG < 31 && central && this.rng.chance(0.45)) {
+      this.freeKickShot(victim.team, { ...victim.pos });
+      return;
+    }
+    if (attHalf && dG >= 20 && dG < 42 && this.rng.chance(0.32)) {
+      this.freeKickCross(victim.team, { ...victim.pos });
       return;
     }
     const b = this.ball;
@@ -527,10 +559,46 @@ export class Match {
     b.judged = false;
     b.offsideFlag = null;
     b.cooldown = 0.3;
+    b.deflected = false;
+    b.chance = "open";
     b.lastTeam = victim.team;
-    if (this.crng.chance(0.5)) {
-      this.emit("foul", fouler.team, fouler.name, this.vary([`Foul by ${fouler.name}.`, `${fouler.name} gives away a free kick.`, `Free kick — ${fouler.name} caught him late.`]));
-    }
+  }
+
+  /** A direct free kick at goal from a central, dangerous position: a specialist
+   * bends it over the wall — low conversion, as in real life. */
+  private freeKickShot(team: 0 | 1, pos: Vec): void {
+    this.freeKicks++;
+    const taker = this.players
+      .filter((p) => p.team === team && p.role !== "GK")
+      .sort((a, c) => c.attrs.longShots + c.attrs.technique + c.attrs.composure - (a.attrs.longShots + a.attrs.technique + a.attrs.composure))[0];
+    if (!taker) return;
+    taker.pos = { ...pos };
+    this.ball.owner = taker;
+    this.ball.pos = { ...pos };
+    this.emit("key_pass", team, taker.name, this.vary([`${taker.name} stands over the free kick...`, `Dangerous free kick — ${taker.name} will shoot...`, `${taker.name} eyes the top corner...`]));
+    this.shoot(taker, taker.attrs.longShots >= 15 ? "placed" : "power", "setpiece");
+  }
+
+  /** A wide/deep attacking free kick whipped into the box for the aerial threats. */
+  private freeKickCross(team: 0 | 1, pos: Vec): void {
+    this.freeKicks++;
+    const taker = this.players
+      .filter((p) => p.team === team && p.role !== "GK")
+      .sort((a, c) => c.attrs.crossing + c.attrs.technique - (a.attrs.crossing + a.attrs.technique))[0];
+    if (!taker) return;
+    const boxX = team === 0 ? PITCH_LENGTH - 9 : 9;
+    this.players
+      .filter((p) => p.team === team && p !== taker && p.role !== "GK")
+      .sort((a, c) => c.attrs.heading + c.attrs.jumpingReach - (a.attrs.heading + a.attrs.jumpingReach))
+      .slice(0, 4)
+      .forEach((p, i) => { p.pos = clampPitch({ x: boxX, y: 28 + i * 4 }); p.target = { ...p.pos }; });
+    taker.pos = { ...pos };
+    this.ball.owner = taker;
+    this.ball.pos = { ...pos };
+    this.emit("key_pass", team, taker.name, this.vary([`${taker.name} will whip the free kick in...`, `Free kick swung into the box by ${taker.name}...`]));
+    const target = this.bestBoxTarget(taker) ?? this.players.find((p) => p.team === team && p.role !== "GK")!;
+    this.cross(taker, target);
+    this.ball.chance = "setpiece"; // a header from this is a set-piece goal
   }
 
   /** A spot kick: taker quality vs the keeper, ~75-80% conversion. */
@@ -554,6 +622,8 @@ export class Match {
       this.ball.owner = null;
       this.ball.shooter = taker;
       this.ball.isShot = true;
+      this.ball.shotType = "placed";
+      this.ball.chance = "penalty";
       this.ball.pos = { x: goal.x, y: 34 };
       this.ball.vel = { x: 0, y: 0 };
       this.scoreGoal(team); // handles score, on-target, goal stat, celebration
@@ -1606,7 +1676,7 @@ export class Match {
     const marker = this.nearestOutfield((1 - attackTeam) as 0 | 1, header.pos);
     const block = marker ? marker.attrs.heading * 0.5 + marker.attrs.marking * 0.3 + marker.attrs.jumpingReach * 0.2 : 7;
     const delivery = 0.65 + taker.attrs.crossing / 45;
-    const connect = clamp(0.04, 0.26, 0.115 * delivery * (aerial / (aerial + block)) * 2);
+    const connect = clamp(0.04, 0.26, 0.10 * delivery * (aerial / (aerial + block)) * 2);
     if (this.rng.chance(connect)) {
       // win the flight and meet it around the penalty spot for a header on goal
       header.pos = clampPitch({ x: attackTeam === 0 ? PITCH_LENGTH - 9 : 9, y: 34 + this.rng.range(-3.5, 3.5) });
@@ -1719,7 +1789,7 @@ export class Match {
     }
   }
 
-  private shoot(shooter: Player, type: ShotType): void {
+  private shoot(shooter: Player, type: ShotType, chance: ChanceType = "open"): void {
     const goal = this.oppGoal(shooter.team);
     const dGoal = dist(shooter.pos, goal);
     const challenger = this.nearestOutfield((1 - shooter.team) as 0 | 1, shooter.pos);
@@ -1773,6 +1843,10 @@ export class Match {
     this.ball.judged = false;
     this.ball.lastTeam = shooter.team;
     this.ball.cooldown = 0;
+    // classify the chance: explicit (cut-back/cross/penalty/set-piece) wins,
+    // else a sprung runner is "through", else open play.
+    this.ball.chance = chance !== "open" ? chance : shooter.dribbleTimer > 0 ? "through" : shooter.assistFrom ? "open" : "open";
+    this.ball.deflected = false;
     this.ball.vel = { x: dir.x * speed, y: dir.y * speed };
     this.shots[shooter.team]++;
     this.shotTypeCounts[type]++;
@@ -1935,6 +2009,7 @@ export class Match {
     b.passType = null;
     b.fromCross = false;
     b.cutback = false;
+    b.deflected = false;
     b.airTimer = 0;
     b.judged = false;
     b.offsideFlag = null;
@@ -1970,17 +2045,19 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.94, (0.42 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.45 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
             const keeperOff = Math.abs(gk.pos.x - (gk.team === 0 ? 0 : PITCH_LENGTH));
             saveProb = keeperOff > 4 ? saveProb * 0.4 : Math.min(0.95, saveProb * 1.15);
           }
+          if (b.deflected) saveProb *= 0.78; // slightly wrong-footed by the deflection
           if (this.rng.chance(saveProb)) {
             this.shotsOnTarget[shooter.team]++; // on target and saved
             shooter.stat.sot++;
             gk.stat.saves++;
+            this.shotOutcomes.saved++;
             this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
             // a hard shot is often parried behind for a corner rather than held
             if (this.rng.chance(0.55)) this.concedeCorner(shooter.team);
@@ -2027,7 +2104,7 @@ export class Match {
           b.passer.stat.keyPasses++;
           claimant.assistFrom = b.passer; // credit the cut-back as an assist
         }
-        this.shoot(claimant, this.chooseShotType(claimant, dist(claimant.pos, goal), 5));
+        this.shoot(claimant, this.chooseShotType(claimant, dist(claimant.pos, goal), 5), "cutback");
         return;
       }
       // otherwise a defender cuts it out — falls through to normal control
@@ -2049,7 +2126,7 @@ export class Match {
           winProb = att / (att + dAer);
         }
         if (this.rng.chance(winProb)) {
-          this.shoot(claimant, "header"); // won the header — first-time at goal
+          this.shoot(claimant, "header", b.chance === "setpiece" ? "setpiece" : "cross"); // won the header
           return;
         }
         if (def) {
@@ -2062,14 +2139,51 @@ export class Match {
       // otherwise dealt with by the keeper/defender below (a clearance)
     }
 
-    // (2) An outfield defender may block a shot with their body
+    // (2) An outfield defender in the line of the shot: he BLOCKS it cleanly,
+    // it DEFLECTS off him (changing direction — a real, common event that
+    // wrong-foots the keeper, flies wide, or wickedly loops in), or it flies past.
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
-      if (this.rng.chance(0.13)) {
+      // HANDBALL: a defender flinging himself in the way sometimes blocks it with
+      // an arm — a penalty in HIS OWN box (and occasionally a booking).
+      const ownGoalX = claimant.team === 0 ? 0 : PITCH_LENGTH;
+      const inOwnBox = Math.abs(claimant.pos.x - ownGoalX) < 16.5 && Math.abs(claimant.pos.y - 34) < 20.16;
+      if (claimant.role !== "GK" && inOwnBox && this.rng.chance(0.003)) {
+        this.handballs++;
+        this.emit("penalty", claimant.team, claimant.name, `Handball by ${claimant.name}! The referee points to the spot...`);
+        if (!claimant.yellow && this.rng.chance(0.3)) { claimant.yellow = true; this.yellowCards++; }
+        this.awardPenalty(b.shooter.team);
+        return;
+      }
+      const r = this.rng.next();
+      if (r < 0.12) {
         claimant.stat.blocks++;
+        this.shotOutcomes.blocked++;
         this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
-        // a block often deflects behind for a corner
-        if (this.rng.chance(0.62) && b.shooter) this.concedeCorner(b.shooter.team);
+        if (this.rng.chance(0.55) && b.shooter) this.concedeCorner(b.shooter.team);
         else this.claim(claimant);
+        return;
+      }
+      if (r < 0.155) {
+        // DEFLECTION: ricochet off the defender sends it on a new path — usually
+        // wide (a corner), occasionally wrong-footing the keeper or wickedly
+        // looping in, and rarely turned into his own net.
+        this.deflections++;
+        const gx = b.shooter.team === 0 ? PITCH_LENGTH : 0;
+        const wobble = this.rng.gauss(0, 7.5); // big spread → most deflections go wide
+        const newAim = clamp(b.aimY + wobble, 18, 50);
+        const wasOff = b.aimY <= GOAL_Y_MIN || b.aimY >= GOAL_Y_MAX;
+        const nowOn = newAim > GOAL_Y_MIN && newAim < GOAL_Y_MAX;
+        b.aimY = newAim;
+        const sp = Math.max(8, len(b.vel) * 0.85);
+        const nd = norm(sub({ x: gx, y: newAim }, b.pos));
+        b.vel = { x: nd.x * sp, y: nd.y * sp };
+        b.judged = false;
+        // a wayward effort turned IN off the defender is an own goal (rare); an
+        // on-target deflection stays the shooter's (credited deflected).
+        b.chance = wasOff && nowOn && this.rng.chance(0.35) ? "owngoal" : "deflected";
+        b.deflected = true;
+        this.emit("shot", claimant.team, claimant.name, this.vary([`Deflection off ${claimant.name}!`, `It takes a wicked deflection!`, `Off ${claimant.name} — the keeper's wrong-footed!`]));
+        return;
       }
       return;
     }
@@ -2212,6 +2326,7 @@ export class Match {
   private deadBall(wasShot: boolean, attackTeam: 0 | 1, defTeam: 0 | 1): void {
     const b = this.ball;
     if (wasShot && b.shooter) {
+      this.shotOutcomes.offtarget++;
       this.emit(
         "shot_off",
         attackTeam,
@@ -2220,7 +2335,7 @@ export class Match {
       );
       // an off-target effort is sometimes deflected behind off a defender — a
       // corner, not a goal kick (a real-world source of corners)
-      if (this.rng.chance(0.22)) {
+      if (this.rng.chance(0.15)) {
         this.concedeCorner(attackTeam);
         return;
       }
@@ -2237,15 +2352,25 @@ export class Match {
   private scoreGoal(team: 0 | 1): void {
     this.score[team]++;
     this.shotsOnTarget[team]++; // a goal is, by definition, on target
+    this.goalsByChance[this.ball.chance]++;
+    if (this.ball.shotType) this.goalsByShot[this.ball.shotType]++;
+    this.shotOutcomes.goal++;
     const shooter = this.ball.shooter;
-    const scorer = shooter?.name ?? "Unknown";
-    if (shooter) {
-      shooter.stat.goals++;
-      shooter.stat.sot++;
-      const assister = shooter.assistFrom;
-      if (assister && assister.team === team && assister !== shooter) assister.stat.assists++;
+    // an own goal (a wayward effort turned in off a defender) counts for the
+    // attacking team but is NOT credited to the shooter as a goal.
+    if (this.ball.chance === "owngoal") {
+      this.ownGoals++;
+      this.emit("goal", team, undefined, this.vary([`OWN GOAL! It's turned into his own net — ${this.shortName(team)} benefit!`, `Off the defender and in — an own goal for ${this.shortName(team)}!`]));
+    } else {
+      const scorer = shooter?.name ?? "Unknown";
+      if (shooter) {
+        shooter.stat.goals++;
+        shooter.stat.sot++;
+        const assister = shooter.assistFrom;
+        if (assister && assister.team === team && assister !== shooter) assister.stat.assists++;
+      }
+      this.emit("goal", team, scorer, this.vary([`GOAL! ${scorer} scores for ${this.shortName(team)}!`, `${scorer} finds the net — GOAL for ${this.shortName(team)}!`, `It's there! ${scorer} scores!`, `GOAL!! ${scorer} makes it count for ${this.shortName(team)}!`]));
     }
-    this.emit("goal", team, scorer, this.vary([`GOAL! ${scorer} scores for ${this.shortName(team)}!`, `${scorer} finds the net — GOAL for ${this.shortName(team)}!`, `It's there! ${scorer} scores!`, `GOAL!! ${scorer} makes it count for ${this.shortName(team)}!`]));
     // leave the ball in the net and hold briefly so the goal is seen / captured
     // for replay, then kick off
     this.ball.owner = null;
