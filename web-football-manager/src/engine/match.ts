@@ -491,8 +491,8 @@ export class Match {
       this.sendOff(fouler, true);
       return;
     }
-    let yellowP = 0.05 + fouler.attrs.aggression / 220;
-    if (dangerous) yellowP += 0.07; // stopping a promising move
+    let yellowP = 0.058 + fouler.attrs.aggression / 200;
+    if (dangerous) yellowP += 0.08; // stopping a promising move
     // a player already on a yellow is booked again far less readily — refs (and
     // the player) are wary of a second — so second-yellow reds stay rare
     if (fouler.yellow) yellowP *= 0.3;
@@ -934,7 +934,9 @@ export class Match {
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
           if (phase < (eager ? 0.45 : 0.65)) continue;
-          const depth = lateRunner ? 0 : 1 + p.attrs.offTheBall * 0.07;
+          // forward-running mids arrive at the TOP of the box (cut-back zone),
+          // staying behind the last line; forwards run beyond it
+          const depth = lateRunner ? -4 : 1 + p.attrs.offTheBall * 0.07;
           const targetX = clamp(lineX + adir * depth, lo, hi);
           // wide players hold a wider line (back-post threat); others come central
           const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
@@ -1325,7 +1327,9 @@ export class Match {
       if (dg < carrierDg - 1) continue; // must be behind the carrier (a pull-back)
       const marker = this.nearestOutfield((1 - carrier.team) as 0 | 1, p.pos);
       const open = marker ? Math.min(10, dist(marker.pos, p.pos)) : 10;
-      const score = open * 1.5 + p.attrs.finishing * 0.2 + p.attrs.longShots * 0.1 - Math.abs(p.pos.y - 34) * 0.2;
+      // an arriving midfielder is the classic cut-back finisher — favour him
+      const arriving = p.role === "MC" || p.role === "AM" || p.role === "DM" ? 4 : 0;
+      const score = open * 1.5 + p.attrs.finishing * 0.2 + p.attrs.longShots * 0.1 + arriving - Math.abs(p.pos.y - 34) * 0.2;
       if (score > bestScore) {
         bestScore = score;
         best = p;

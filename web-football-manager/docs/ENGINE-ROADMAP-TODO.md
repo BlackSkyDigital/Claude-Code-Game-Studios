@@ -65,12 +65,15 @@ Levers TESTED and rejected (kept here so we don't repeat them):
 
 ## Calibration baseline to protect (headless dashboard, `tools/dash.mjs`)
 
-All-green realism pass (24 matches, MCI v LIV):
-goals ~3.0 · shots ~27 · on-target ~38% · pass cmp ~81% · fouls ~20 ·
-yellows ~2.7 · reds ~0.1 · pens ~0.2 · corners ~11 · subs ~5.3 ·
-goal split ST ~45% / wide ~51% / mid ~4% (striker is top scorer again).
-Slightly high & still being tuned: ball in-flight ~34% (real 24-32),
-offsides ~5.3 (real 2-5). Midfielders still under-score (~4% vs ~15-20% real).
+12/13 metrics in real range (24 matches, MCI v LIV):
+goals ~2.7 · shots ~28 · on-target ~36% · pass cmp ~81% · fouls ~20 ·
+yellows ~3.0 · reds ~0.2 · pens ~0.2 · corners ~12 · offsides ~4.5 · subs ~5.2 ·
+goal split ST ~51% / wide ~43% / mid ~6% (striker top scorer).
+ONLY remaining out-of-range: ball in-flight ~34% (real 24-32). It's structurally
+tied to the high pass count (~2600/match, ~2x real); every lever to cut it
+(faster passes -> goals/offsides spike; fewer passes/slower cadence -> foul
+explosion) is worse. Accepted at ~34% (down from 47%). A true fix needs a
+"hold/retain the ball" behavior (carrier shields without passing) — future work.
 
 **Key unlock:** a live shot was being silently absorbed by bodies in the box
 (~60% of shots never reached goal) — fixing that made the whole shot economy
