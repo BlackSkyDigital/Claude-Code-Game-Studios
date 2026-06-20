@@ -63,6 +63,30 @@ Levers TESTED and rejected (kept here so we don't repeat them):
   completion ~80%, so it barely moved (and nudged box fouls up).
 - What worked: faster/crisper passes + fewer lofted balls.
 
+## Comparison study (tactics × teams × formations) — `tools/`
+
+Harnesses: `dash.mjs` (metrics vs real ranges), `tactics.mjs` (each style vs
+balanced), `teams.mjs` (round robin), `formations.mjs` (each formation vs 4-3-3).
+
+Findings & fixes from the study:
+- **Tactics** — possession styles were *losing* to balanced (a safe pass was as
+  interceptable as a risky one). Fixed: interception scales with the passer's
+  directness. Now all 10 styles play distinctly: tiki-taka effective (2.3-1.1),
+  gegenpress open high-volume (26-17), counter solid (2.1-1.0), catenaccio
+  suppresses (1.3-0.8), direct-counter breaks (18-10).
+- **Teams** — Man City (a top squad) finished LAST because attacking full-backs
+  never recovered. Fixed: per-player duty only pushes forward in possession;
+  out of possession they track back. Teams now separate by squad quality.
+- **Formations** — slot now drives the player's role, so formation genuinely
+  changes the side. Added 4-2-3-1 / 3-5-2 / 5-3-2. They play distinctly
+  (4-2-3-1 open, 3-5-2 solid, etc.).
+
+Known edges (documented, not chased — fixing risks the calibrated baseline):
+- ball in-flight ~35% (pass-frequency limit of the model)
+- 5-3-2 over-defends (~0.2 conceded) — 5 defenders crowd out every chance
+- possession % compressed ~47-53% across styles (tempo/recycling-driven metric)
+- midfield scoring ~6% (a bit low)
+
 ## Calibration baseline to protect (headless dashboard, `tools/dash.mjs`)
 
 12/13 metrics in real range (24 matches, MCI v LIV):
