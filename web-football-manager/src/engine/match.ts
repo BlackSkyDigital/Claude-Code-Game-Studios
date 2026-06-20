@@ -62,6 +62,8 @@ interface Player {
   injured: boolean; // carrying a knock — slower, more error-prone
   yellow: boolean; // has been booked (a second booking is a red)
   starter: boolean; // started the match (vs came off the bench)
+  markName: string | null; // individual instruction: opponent name or Role to man-mark
+  tightMark: boolean; // stick especially tight to the marked man
   stat: PlayerStat;
 }
 
@@ -282,6 +284,8 @@ export class Match {
         injured: false,
         yellow: false,
         starter,
+        markName: pd.instructions?.mark ?? null,
+        tightMark: pd.instructions?.tightMark ?? false,
         stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
       };
     };
@@ -723,6 +727,58 @@ export class Match {
           d.target = clampPitch({ x: b.pos.x + off.x * 5, y: b.pos.y + off.y * 5 });
         }
       }
+
+      const protectGoal = this.oppGoal(possTeam); // attackers' target = defenders' goal
+      const marked = new Set<Player>();
+
+      // INDIVIDUAL MARKING (player instruction): a player told to man-mark a
+      // specific opponent (by name) or position (by role) tracks him goal-side,
+      // regardless of the team's marking scheme.
+      for (const d of this.players) {
+        if (d.team !== defTeam || d.role === "GK" || !d.markName || pressers.includes(d)) continue;
+        const tgt = this.resolveMark(d);
+        if (!tgt) continue;
+        marked.add(d);
+        const toGoal = norm(sub(protectGoal, tgt.pos));
+        const tight = d.tightMark ? 1.6 : 3.0;
+        d.target = clampPitch({ x: tgt.pos.x + toGoal.x * tight, y: tgt.pos.y + toGoal.y * tight });
+      }
+
+      // TEAM MAN-MARKING: only if the side's scheme is man-marking. The back line
+      // picks up the most dangerous central runner and sits goal-side, so he's
+      // tracked rather than free. Zonal sides instead hold their shape (above).
+      if (this.tac(defTeam).marking === "man") {
+        const dangerous = this.players
+          .filter(
+            (p) =>
+              p.team === possTeam &&
+              p.role !== "GK" &&
+              this.isThreat(p, possTeam) &&
+              dist(p.pos, protectGoal) < 40,
+          )
+          .sort((a, c) => dist(a.pos, protectGoal) - dist(c.pos, protectGoal))
+          .slice(0, 1);
+        const backs = this.players.filter(
+          (p) => p.team === defTeam && p.role === "DC" && !pressers.includes(p) && !marked.has(p),
+        );
+        for (const att of dangerous) {
+          let marker: Player | null = null;
+          let bd = Infinity;
+          for (const d of backs) {
+            if (marked.has(d)) continue;
+            const dd = dist(d.pos, att.pos);
+            if (dd < bd) {
+              bd = dd;
+              marker = d;
+            }
+          }
+          if (!marker) break;
+          marked.add(marker);
+          const toGoal = norm(sub(protectGoal, att.pos));
+          const tight = clamp(4.0 + dist(att.pos, protectGoal) * 0.05, 4.0, 7.0);
+          marker.target = clampPitch({ x: att.pos.x + toGoal.x * tight, y: att.pos.y + toGoal.y * tight });
+        }
+      }
       // Support play: the nearest teammates take up angles around the carrier
       // to form passing triangles (two ahead in the half-spaces, one behind to
       // recycle) — this is what lets possession progress through the thirds.
@@ -914,7 +970,7 @@ export class Match {
     if (this.inBoxAttacking(owner)) {
       const cb = this.bestCutbackTarget(owner);
       if (cb) {
-        const cbProb = 0.022 + (owner.attrs.vision / 20) * 0.025;
+        const cbProb = 0.02 + (owner.attrs.vision / 20) * 0.02;
         if (this.rng.chance(cbProb)) {
           this.cutback(owner, cb);
           return;
@@ -1421,6 +1477,38 @@ export class Match {
     return p.team === 0 ? p.pos.x > 70 : p.pos.x < 35;
   }
 
+  /** Resolve a player's individual marking instruction to a current opponent:
+   * an exact opponent name (fixed man-mark) or a Role (mark the nearest opponent
+   * playing that position). */
+  private resolveMark(d: Player): Player | null {
+    if (!d.markName) return null;
+    const oppTeam = (1 - d.team) as 0 | 1;
+    const byName = this.players.find((p) => p.team === oppTeam && p.name === d.markName);
+    if (byName) return byName;
+    // otherwise treat the instruction as a position/role to pick up
+    let best: Player | null = null;
+    let bd = Infinity;
+    for (const p of this.players) {
+      if (p.team !== oppTeam || p.role !== (d.markName as Role)) continue;
+      const dd = dist(p.pos, d.pos);
+      if (dd < bd) {
+        bd = dd;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** An advanced attacker worth man-marking (forward roles in the attacking
+   * half), used by the defensive line to pick up runners. */
+  private isThreat(p: Player, attTeam: 0 | 1): boolean {
+    const inAttHalf = attTeam === 0 ? p.pos.x > 52 : p.pos.x < 53;
+    return (
+      inAttHalf &&
+      (p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML" || p.role === "MC")
+    );
+  }
+
   /** Is the receiver in an offside position relative to where the pass is played
    * from? Offside = in the attacking half, ahead of the ball, and beyond the
    * second-last defender (the last outfielder, with the keeper deepest). */
@@ -1528,7 +1616,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.92, (0.30 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
+            Math.min(0.92, (0.275 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {

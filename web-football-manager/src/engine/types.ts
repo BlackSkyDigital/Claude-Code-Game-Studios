@@ -49,12 +49,26 @@ export type Trait =
   | "cuts_inside" // wide player drifts infield onto his stronger foot
   | "gets_forward"; // full-back / midfielder pushes up to join attacks
 
+/**
+ * Individual player instructions — the per-player layer that sits on top of the
+ * team tactics (FM-style). For now this covers marking duties; role/duty and
+ * other PIs can extend this without a data migration.
+ */
+export interface PlayerInstructions {
+  /** man-mark a specific opponent: an opponent's name, or a Role to mark the
+   * nearest opponent playing that position (e.g. mark their "AM"). */
+  mark?: string;
+  /** stick especially tight to the marked man (less space, but easier to lose) */
+  tightMark?: boolean;
+}
+
 export interface PlayerDef {
   name: string;
   number: number;
   role: Role;
   attrs: Attrs;
   traits?: Trait[];
+  instructions?: PlayerInstructions;
 }
 
 export interface TeamDef {

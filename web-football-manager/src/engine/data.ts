@@ -1,4 +1,4 @@
-import type { PlayerDef, Role, TeamDef, Trait } from "./types.js";
+import type { PlayerDef, PlayerInstructions, Role, TeamDef, Trait } from "./types.js";
 import { makeAttrs, type Attrs } from "./attributes.js";
 
 /**
@@ -21,8 +21,9 @@ function p(
   overall: number,
   ov: Partial<Attrs> = {},
   traits: Trait[] = [],
+  instructions?: PlayerInstructions,
 ): PlayerDef {
-  return { name, number, role, attrs: makeAttrs(role, overall, ov), traits };
+  return { name, number, role, attrs: makeAttrs(role, overall, ov), traits, instructions };
 }
 
 export const TEAMS: TeamDef[] = [
@@ -38,7 +39,7 @@ export const TEAMS: TeamDef[] = [
       p("Dias", 3, "DC", 17, { tackling: 17, marking: 17, composure: 16 }),
       p("Stones", 5, "DC", 16, { passing: 16, composure: 16 }),
       p("Gvardiol", 24, "DL", 16, { pace: 16, strength: 16 }, ["gets_forward"]),
-      p("Rodri", 16, "DM", 18, { passing: 18, decisions: 18, composure: 18, tackling: 17 }),
+      p("Rodri", 16, "DM", 18, { passing: 18, decisions: 18, composure: 18, tackling: 17 }, [], { mark: "Szoboszlai" }),
       p("De Bruyne", 17, "MC", 18, { passing: 20, vision: 20, longShots: 18, technique: 18 }, ["tries_killer_balls", "shoots_from_distance"]),
       p("Silva", 20, "MC", 17, { technique: 19, vision: 18, dribbling: 17 }, ["tries_killer_balls", "likes_to_dribble"]),
       p("Foden", 47, "MR", 17, { dribbling: 18, technique: 18, finishing: 16 }, ["cuts_inside", "likes_to_dribble"]),
@@ -65,7 +66,7 @@ export const TEAMS: TeamDef[] = [
       p("Konate", 5, "DC", 15, { pace: 16, strength: 16 }),
       p("Van Dijk", 4, "DC", 18, { tackling: 18, marking: 18, heading: 18, strength: 18, composure: 18 }),
       p("Robertson", 26, "DL", 16, { stamina: 18, crossing: 17, pace: 16 }, ["gets_forward"]),
-      p("Mac Allister", 10, "DM", 16, { passing: 17, vision: 16, technique: 16 }, ["tries_killer_balls"]),
+      p("Mac Allister", 10, "DM", 16, { passing: 17, vision: 16, technique: 16 }, ["tries_killer_balls"], { mark: "De Bruyne", tightMark: true }),
       p("Szoboszlai", 8, "MC", 16, { longShots: 17, stamina: 17 }, ["shoots_from_distance"]),
       p("Gravenberch", 38, "MC", 15, { dribbling: 16, strength: 15 }, ["likes_to_dribble"]),
       p("Salah", 11, "MR", 18, { finishing: 18, pace: 17, dribbling: 18, composure: 17 }, ["cuts_inside", "places_shots"]),

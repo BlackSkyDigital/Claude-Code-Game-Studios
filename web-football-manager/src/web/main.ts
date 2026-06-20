@@ -39,6 +39,8 @@ const stPass = [$("stPass0"), $("stPass1")] as const;
 const stFit = [$("stFit0"), $("stFit1")] as const;
 const homeStyleSel = $<HTMLSelectElement>("homeStyle");
 const awayStyleSel = $<HTMLSelectElement>("awayStyle");
+const homeMarkSel = $<HTMLSelectElement>("homeMark");
+const awayMarkSel = $<HTMLSelectElement>("awayMark");
 const weatherSel = $<HTMLSelectElement>("weatherSel");
 const conditionsLine = $("conditions");
 const commNow = $("commNow");
@@ -174,6 +176,19 @@ function fillTeamSelects(): void {
   homeStyleSel.value = "balanced";
   awayStyleSel.value = "balanced";
 
+  const markOpts: [string, string][] = [["zonal", "Zonal"], ["man", "Man-marking"]];
+  fillSelect(homeMarkSel, markOpts);
+  fillSelect(awayMarkSel, markOpts);
+  // marking dropdown follows the style preset, but can be overridden
+  const syncMark = (style: HTMLSelectElement, mark: HTMLSelectElement) =>
+    style.addEventListener("change", () => {
+      mark.value = tacticsForStyle(style.value as TacticalStyle).marking;
+    });
+  syncMark(homeStyleSel, homeMarkSel);
+  syncMark(awayStyleSel, awayMarkSel);
+  homeMarkSel.value = tacticsForStyle("balanced").marking;
+  awayMarkSel.value = tacticsForStyle("balanced").marking;
+
   fillSelect(weatherSel, WEATHER_TYPES.map((w) => [w, weatherLabel(w)] as [string, string]));
   weatherSel.value = "clear";
 }
@@ -182,9 +197,14 @@ function newMatch(): void {
   const h = TEAMS[Number(homeSel.value)]!;
   const a = TEAMS[Number(awaySel.value)]!;
   const seed = Number(seedInput.value) || 1;
+  const homeTactics = tacticsForStyle(homeStyleSel.value as TacticalStyle);
+  const awayTactics = tacticsForStyle(awayStyleSel.value as TacticalStyle);
+  // marking is a chosen team instruction layered on the style preset
+  homeTactics.marking = homeMarkSel.value as "zonal" | "man";
+  awayTactics.marking = awayMarkSel.value as "zonal" | "man";
   match = new Match(h, a, seed, {
-    homeTactics: tacticsForStyle(homeStyleSel.value as TacticalStyle),
-    awayTactics: tacticsForStyle(awayStyleSel.value as TacticalStyle),
+    homeTactics,
+    awayTactics,
     weather: weatherSel.value as Weather,
   });
   lastEventCount = 0;
