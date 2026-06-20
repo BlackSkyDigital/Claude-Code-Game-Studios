@@ -63,8 +63,17 @@ Levers TESTED and rejected (kept here so we don't repeat them):
   completion ~80%, so it barely moved (and nudged box fouls up).
 - What worked: faster/crisper passes + fewer lofted balls.
 
-## Calibration baseline to protect (headless, ~40 matches)
+## Calibration baseline to protect (headless dashboard, `tools/dash.mjs`)
 
-goals ~2.5 · shots ~28 · pass acc ~81% · fouls ~10 · yellows ~2 · reds ~0.25 ·
-pens ~0.45 · subs ~5 · offsides ~4.5 · possession responds to tactics. Every
-change is verified against these before shipping.
+All-green realism pass (24 matches, MCI v LIV):
+goals ~3.1 · shots ~30 · on-target ~36% · pass cmp ~81% · fouls ~20 ·
+yellows ~2.5 · reds ~0.3 · pens ~0.2 · corners ~11.6 · subs ~5.1.
+Slightly high & still being tuned: ball in-flight ~34% (real 24-32),
+offsides ~5.3 (real 2-5). Goal split ST ~38% / wide ~62% / mid ~0% — wide-heavy,
+midfielders don't score yet.
+
+**Key unlock:** a live shot was being silently absorbed by bodies in the box
+(~60% of shots never reached goal) — fixing that made the whole shot economy
+(on-target, saves, blocks, corners) realistic for the first time.
+
+Run `node tools/dash.mjs` after `npx tsc` to check every metric vs real ranges.

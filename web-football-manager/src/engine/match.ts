@@ -420,7 +420,7 @@ export class Match {
     this.foulCount++;
     // a foul in the box is a penalty most (not all) of the time — some are
     // adjudged just outside the area or the attacker shields it out
-    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.24);
+    const pen = this.inBoxAttacking(victim) && this.rng.chance(0.19);
     this.maybeCard(fouler, victim, pen);
     if (pen) {
       this.awardPenalty(victim.team);
@@ -487,7 +487,7 @@ export class Match {
    * reckless challenge is a red and the player is sent off. */
   private maybeCard(fouler: Player, victim: Player, isPen: boolean): void {
     const dangerous = this.inFinalThird(victim) || isPen;
-    if (dangerous && this.rng.chance(0.004)) {
+    if (dangerous && this.rng.chance(0.0025)) {
       this.sendOff(fouler, true);
       return;
     }
@@ -931,7 +931,7 @@ export class Match {
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
           if (phase < (eager ? 0.45 : 0.65)) continue;
-          const depth = lateRunner ? 1 : 2 + p.attrs.offTheBall * 0.12;
+          const depth = lateRunner ? 0 : 1 + p.attrs.offTheBall * 0.07;
           const targetX = clamp(lineX + adir * depth, lo, hi);
           // wide players hold a wider line (back-post threat); others come central
           const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
@@ -1234,7 +1234,7 @@ export class Match {
       // "try killer balls" look for the through ball more readily.
       const killer = owner.traits.has("tries_killer_balls");
       let type: PassType;
-      if (advancement > 9 && spaceAhead > (killer ? 8 : 11) && this.rng.chance(sees * (killer ? 0.85 : 0.55))) {
+      if (advancement > 9 && spaceAhead > (killer ? 9 : 12) && this.rng.chance(sees * (killer ? 0.7 : 0.45))) {
         type = "through"; // a runner with clear space behind the line (vision)
       } else if (d > 30 && (lateral > 26 || advancement > 16) && this.rng.chance(0.18 + sees * 0.25)) {
         type = "lofted"; // a genuine switch / over-the-top — kept rarer (it hangs)
@@ -1546,7 +1546,7 @@ export class Match {
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
         speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
     }
-    let spread = ((1 - shootAttr / 20) * 4.3 + 2.0 + dGoal * 0.08 + pressure + this.wx.shotScatter) * spreadMul;
+    let spread = ((1 - shootAttr / 20) * 6.8 + 3.5 + dGoal * 0.18 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);
@@ -1768,7 +1768,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.92, (0.25 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.37 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
@@ -1862,7 +1862,7 @@ export class Match {
 
     // (2) An outfield defender may block a shot with their body
     if (b.isShot && b.shooter && b.shooter.team !== claimant.team) {
-      if (this.rng.chance(0.1)) {
+      if (this.rng.chance(0.13)) {
         claimant.stat.blocks++;
         this.emit("block", claimant.team, claimant.name, this.vary([`...blocked by ${claimant.name}!`, `${claimant.name} throws himself in front of it!`, `Blocked!`]));
         // a block often deflects behind for a corner
@@ -1871,6 +1871,10 @@ export class Match {
       }
       return;
     }
+    // a LIVE shot is not "controllable" by a nearby player — it flies on to the
+    // keeper / goal / wide. (Without this, bodies in the box silently absorbed
+    // ~60% of shots, so almost nothing reached goal = far too few on target.)
+    if (b.isShot) return;
 
     // open-play loose ball (pass, clearance, deflection): first touch / handling.
     // A tight defender and tired legs both make a clean first touch harder — a
@@ -1969,6 +1973,12 @@ export class Match {
         b.shooter.name,
         this.vary([`...just wide!`, `...off target.`, `${b.shooter.name} drags it wide.`, `...over the bar!`, `So close!`]),
       );
+      // an off-target effort is sometimes deflected behind off a defender — a
+      // corner, not a goal kick (a real-world source of corners)
+      if (this.rng.chance(0.22)) {
+        this.concedeCorner(attackTeam);
+        return;
+      }
     }
     const gk = this.players.find((p) => p.team === defTeam && p.role === "GK")!;
     b.owner = gk;
