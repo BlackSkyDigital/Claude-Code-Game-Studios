@@ -1056,8 +1056,8 @@ export class Match {
         for (const p of this.players) {
           if (p.team !== possTeam || p === b.owner) continue;
           const fwd = p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
-          // a single forward-running midfielder may join late ("gets forward"),
-          // but most midfielders stay to support so the shape doesn't collapse
+          // a forward-running midfielder may join late ("gets forward" / PI), but
+          // most midfielders stay to support so the shape doesn't collapse
           const lateRunner = (p.role === "MC" && p.traits.has("gets_forward")) || p.instr.getForward === true;
           if (!fwd && !lateRunner) continue;
           const eager = p.traits.has("runs_in_behind") || p.instr.getForward === true;
@@ -1267,7 +1267,7 @@ export class Match {
     if (this.inBoxAttacking(owner)) {
       const cb = this.bestCutbackTarget(owner);
       if (cb) {
-        const cbProb = 0.015 + (owner.attrs.vision / 20) * 0.015;
+        const cbProb = 0.016 + (owner.attrs.vision / 20) * 0.016;
         if (this.rng.chance(cbProb)) {
           this.cutback(owner, cb);
           return;
@@ -1470,7 +1470,7 @@ export class Match {
       // the striker is the focal point in the box — aim for him a bit more; a
       // late-arriving attacking midfielder is a real threat at the back post too
       const focal =
-        p.role === "ST" ? 5 : p.role === "AM" ? 3 : p.role === "MC" && p.duty === "attack" ? 3 : 0;
+        p.role === "ST" ? 3 : p.role === "AM" ? 3 : p.role === "MC" || p.role === "DM" ? 3 : 0;
       const score =
         central * 7 + openness * 1.6 + aerial * 0.4 + p.attrs.offTheBall * 0.15 + focal - dist(p.pos, goal) * 0.18;
       if (score > bestScore) {
@@ -1596,8 +1596,27 @@ export class Match {
     this.ball.owner = taker;
     this.ball.pos = { ...taker.pos };
     this.emit("corner", attackTeam, taker.name, this.vary([`Corner to ${this.shortName(attackTeam)}.`, `${taker.name} stands over the corner...`, `Corner kick, ${this.shortName(attackTeam)}...`]));
-    const target = this.bestBoxTarget(taker) ?? attackers[0]!;
-    this.cross(taker, target);
+    // SET-PIECE HEADER: the strongest aerial threat (often a centre-back up for
+    // the corner, or a target man) attacks the delivery. Whether he connects with
+    // a clean header depends on the delivery quality and his aerial duel with the
+    // marker — so a real share of goals comes off set pieces, scored by defenders
+    // and target men rather than only the front line. ~real ~3% of corners score.
+    const header = attackers[0]!;
+    const aerial = (header.attrs.heading * 0.6 + header.attrs.jumpingReach * 0.3 + header.attrs.aggression * 0.1) * this.sharp(header);
+    const marker = this.nearestOutfield((1 - attackTeam) as 0 | 1, header.pos);
+    const block = marker ? marker.attrs.heading * 0.5 + marker.attrs.marking * 0.3 + marker.attrs.jumpingReach * 0.2 : 7;
+    const delivery = 0.65 + taker.attrs.crossing / 45;
+    const connect = clamp(0.04, 0.26, 0.115 * delivery * (aerial / (aerial + block)) * 2);
+    if (this.rng.chance(connect)) {
+      // win the flight and meet it around the penalty spot for a header on goal
+      header.pos = clampPitch({ x: attackTeam === 0 ? PITCH_LENGTH - 9 : 9, y: 34 + this.rng.range(-3.5, 3.5) });
+      this.ball.owner = header;
+      this.ball.pos = { ...header.pos };
+      this.shoot(header, "header");
+    } else {
+      const target = this.bestBoxTarget(taker) ?? attackers[0]!;
+      this.cross(taker, target);
+    }
   }
 
   /** Open space ahead of a player toward the goal they attack (for runs). */
@@ -2117,7 +2136,7 @@ export class Match {
           const trap = this.tac(defTeam).offsideTrap;
           const ra = claimant.attrs;
           const runner = (ra.pace * 0.4 + ra.offTheBall * 0.4 + ra.anticipation * 0.2) / 20;
-          const springP = craft / 26 + trap * runner * 0.55;
+          const springP = craft / 34 + trap * runner * 0.45;
           if (this.rng.chance(springP)) {
             claimant.dribbleTimer = trap > 0.35 ? 1.7 : 1.1; // clean through if the trap is beaten
             if (trap > 0.35) {
