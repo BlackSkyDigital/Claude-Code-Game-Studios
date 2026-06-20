@@ -1064,7 +1064,7 @@ export class Match {
           if (!fwd && !eager && p.attrs.offTheBall < 15) continue;
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
-          if (phase < (eager ? 0.45 : 0.65) - brk * 0.5) continue;
+          if (phase < (eager ? 0.45 : 0.65) - brk * 0.35) continue;
           // forward-running mids arrive at the TOP of the box (cut-back zone),
           // staying behind the last line; forwards run beyond it
           const depth = lateRunner ? -4 : 1 + p.attrs.offTheBall * 0.07;
@@ -1168,7 +1168,7 @@ export class Match {
       const dTac = this.tac(challenger.team).tackling;
       const harder = challenger.instr.tackleHarder === true;
       const justLostC = this.sinceWon(owner.team) < 3.5; // challenger's side just lost it
-      const swarm = justLostC ? 1 + (this.tac(challenger.team).counterPress - 0.5) * 0.8 : 1;
+      const swarm = justLostC ? 1 + (this.tac(challenger.team).counterPress - 0.5) * 0.5 : 1;
       const winAggro = (0.8 + 0.4 * dTac) * (harder ? 1.12 : 1) * swarm; // 0.5/none → 1.0
       const foulAggro = (0.55 + 0.9 * dTac) * (harder ? 1.25 : 1); // 0.5/none → 1.0
       const tackleSkill =
@@ -1429,7 +1429,7 @@ export class Match {
       const riskPenalty = typeRisk * (1 - skill / 20);
       const progress =
         advancement >= 0
-          ? advancement * (1.0 + 0.6 * D) * (1 + breaking * 0.8) // break = pour forward
+          ? advancement * (1.0 + 0.6 * D) * (1 + breaking * 0.45) // break = pour forward
           : advancement * 1.7; // backward hurts
       const score =
         progress +

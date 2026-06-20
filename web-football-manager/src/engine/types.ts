@@ -103,6 +103,9 @@ export interface TeamDef {
   color: string; // primary kit colour (CSS)
   textColor: string; // number colour for contrast
   formation: string; // key into FORMATIONS
+  /** the side's default tactical style (a TacticalStyle key) — how they set up
+   * when no explicit tactics are chosen (e.g. season simulation). */
+  style?: string;
   players: PlayerDef[]; // exactly 11 (the starting XI)
   bench?: PlayerDef[]; // substitutes available from the bench
 }
