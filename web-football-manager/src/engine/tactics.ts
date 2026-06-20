@@ -1,8 +1,14 @@
 /**
  * Team tactics. A tactical *style* is a named preset of the underlying
  * "team instruction" knobs (mentality, tempo, directness, pressing, line
- * height, width), mirroring how Football Manager's mentality/style shapes
+ * height, width, …), mirroring how Football Manager's mentality/style shapes
  * every passage of play. The match engine reads these knobs directly.
+ *
+ * Every knob is a continuous value, so the UI can expose them as live sliders
+ * (FM-style) — a preset is just a convenient starting point, and any deviation
+ * is a fully-supported "custom" tactic. Each knob is designed so its NEUTRAL
+ * value (0.5, or 0 for the signed/opt-in ones) reproduces the engine's baseline
+ * behaviour, which keeps the calibrated "balanced" baseline intact.
  */
 
 export type TacticalStyle =
@@ -28,20 +34,44 @@ export interface TeamTactics {
   /** how the defence marks: "zonal" holds shape; "man" tracks the most
    * dangerous runners (more cover, can be pulled out of position) */
   marking: "zonal" | "man";
+  // ---- extended instructions (all neutral at the stated value) ----
+  /** challenge intensity: 0 stay on feet (few fouls) .. 1 get stuck in (more
+   * tackles won AND more fouls/cards). Neutral 0.5. */
+  tackling: number;
+  /** willingness to shoot, especially from range: 0 work it into the box ..
+   * 1 shoot on sight. Neutral 0.5. */
+  shootOnSight: number;
+  /** expressiveness/risk in possession: 0 disciplined (safe) .. 1 expressive
+   * (more through-balls, dribbles, ambition). Neutral 0.5. */
+  creativeFreedom: number;
+  /** counter-press on losing the ball: 0 drop & regroup .. 1 swarm to win it
+   * back immediately. Neutral 0.5. */
+  counterPress: number;
+  /** attacking transition on winning the ball: 0 hold shape & build ..
+   * 1 break at pace (direct, runners go). Neutral 0.5. */
+  counterAttack: number;
+  /** which channel attacks favour: -1 left flank .. 0 middle .. +1 right.
+   * Neutral 0. */
+  focusPlay: number;
+  /** push up to spring the offside trap: 0 off .. 1 aggressive step-up.
+   * Neutral 0 (off). */
+  offsideTrap: number;
 }
 
 const PRESETS: Record<TacticalStyle, Omit<TeamTactics, "style">> = {
-  // mentality, tempo, directness, pressing, lineHeight, width, marking
-  balanced: { mentality: 0, tempo: 0.5, directness: 0.5, pressing: 0.5, lineHeight: 0.5, width: 0.5, marking: "zonal" },
-  "tiki-taka": { mentality: 0.3, tempo: 0.55, directness: 0.12, pressing: 0.72, lineHeight: 0.78, width: 0.38, marking: "zonal" },
-  "vertical-tiki-taka": { mentality: 0.45, tempo: 0.7, directness: 0.35, pressing: 0.75, lineHeight: 0.78, width: 0.42, marking: "zonal" },
-  gegenpress: { mentality: 0.6, tempo: 0.82, directness: 0.45, pressing: 0.96, lineHeight: 0.85, width: 0.6, marking: "zonal" },
-  "control-possession": { mentality: 0.2, tempo: 0.42, directness: 0.22, pressing: 0.55, lineHeight: 0.62, width: 0.55, marking: "zonal" },
-  counter: { mentality: -0.4, tempo: 0.62, directness: 0.62, pressing: 0.3, lineHeight: 0.32, width: 0.5, marking: "man" },
-  "direct-counter": { mentality: -0.2, tempo: 0.78, directness: 0.78, pressing: 0.35, lineHeight: 0.4, width: 0.55, marking: "man" },
-  "route-one": { mentality: 0.1, tempo: 0.6, directness: 0.95, pressing: 0.42, lineHeight: 0.46, width: 0.62, marking: "zonal" },
-  "wing-play": { mentality: 0.25, tempo: 0.58, directness: 0.5, pressing: 0.55, lineHeight: 0.58, width: 0.92, marking: "zonal" },
-  catenaccio: { mentality: -0.6, tempo: 0.38, directness: 0.55, pressing: 0.22, lineHeight: 0.2, width: 0.45, marking: "man" },
+  // mentality, tempo, directness, pressing, lineHeight, width, marking,
+  // tackling, shootOnSight, creativeFreedom, counterPress, counterAttack,
+  // focusPlay, offsideTrap
+  balanced: { mentality: 0, tempo: 0.5, directness: 0.5, pressing: 0.5, lineHeight: 0.5, width: 0.5, marking: "zonal", tackling: 0.5, shootOnSight: 0.5, creativeFreedom: 0.5, counterPress: 0.5, counterAttack: 0.5, focusPlay: 0, offsideTrap: 0 },
+  "tiki-taka": { mentality: 0.3, tempo: 0.55, directness: 0.12, pressing: 0.72, lineHeight: 0.78, width: 0.38, marking: "zonal", tackling: 0.4, shootOnSight: 0.32, creativeFreedom: 0.7, counterPress: 0.78, counterAttack: 0.32, focusPlay: 0, offsideTrap: 0.45 },
+  "vertical-tiki-taka": { mentality: 0.45, tempo: 0.7, directness: 0.35, pressing: 0.75, lineHeight: 0.78, width: 0.42, marking: "zonal", tackling: 0.45, shootOnSight: 0.5, creativeFreedom: 0.72, counterPress: 0.75, counterAttack: 0.62, focusPlay: 0, offsideTrap: 0.45 },
+  gegenpress: { mentality: 0.6, tempo: 0.82, directness: 0.45, pressing: 0.96, lineHeight: 0.85, width: 0.6, marking: "zonal", tackling: 0.62, shootOnSight: 0.55, creativeFreedom: 0.6, counterPress: 1.0, counterAttack: 0.72, focusPlay: 0, offsideTrap: 0.6 },
+  "control-possession": { mentality: 0.2, tempo: 0.42, directness: 0.22, pressing: 0.55, lineHeight: 0.62, width: 0.55, marking: "zonal", tackling: 0.45, shootOnSight: 0.35, creativeFreedom: 0.58, counterPress: 0.55, counterAttack: 0.3, focusPlay: 0, offsideTrap: 0.3 },
+  counter: { mentality: -0.4, tempo: 0.62, directness: 0.62, pressing: 0.3, lineHeight: 0.32, width: 0.5, marking: "man", tackling: 0.55, shootOnSight: 0.55, creativeFreedom: 0.5, counterPress: 0.25, counterAttack: 1.0, focusPlay: 0, offsideTrap: 0.12 },
+  "direct-counter": { mentality: -0.2, tempo: 0.78, directness: 0.78, pressing: 0.35, lineHeight: 0.4, width: 0.55, marking: "man", tackling: 0.55, shootOnSight: 0.65, creativeFreedom: 0.5, counterPress: 0.3, counterAttack: 1.0, focusPlay: 0, offsideTrap: 0.15 },
+  "route-one": { mentality: 0.1, tempo: 0.6, directness: 0.95, pressing: 0.42, lineHeight: 0.46, width: 0.62, marking: "zonal", tackling: 0.55, shootOnSight: 0.7, creativeFreedom: 0.32, counterPress: 0.4, counterAttack: 0.6, focusPlay: 0, offsideTrap: 0.15 },
+  "wing-play": { mentality: 0.25, tempo: 0.58, directness: 0.5, pressing: 0.55, lineHeight: 0.58, width: 0.92, marking: "zonal", tackling: 0.5, shootOnSight: 0.5, creativeFreedom: 0.55, counterPress: 0.55, counterAttack: 0.55, focusPlay: 0, offsideTrap: 0.3 },
+  catenaccio: { mentality: -0.6, tempo: 0.38, directness: 0.55, pressing: 0.22, lineHeight: 0.2, width: 0.45, marking: "man", tackling: 0.72, shootOnSight: 0.45, creativeFreedom: 0.4, counterPress: 0.2, counterAttack: 0.55, focusPlay: 0, offsideTrap: 0 },
 };
 
 export const TACTICAL_STYLES = Object.keys(PRESETS) as TacticalStyle[];

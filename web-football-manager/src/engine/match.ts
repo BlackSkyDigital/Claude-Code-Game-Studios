@@ -1,5 +1,5 @@
 import { RNG } from "./rng.js";
-import { FORMATIONS, mirror, type Slot } from "./formations.js";
+import { mirror, resolveFormation, type Slot } from "./formations.js";
 import {
   GOAL_Y_MAX,
   GOAL_Y_MIN,
@@ -10,6 +10,7 @@ import {
   type MatchEventType,
   type Duty,
   type PlayerDef,
+  type PlayerInstructions,
   type Role,
   type TeamDef,
   type Trait,
@@ -28,6 +29,10 @@ import {
 export interface MatchSetup {
   homeTactics?: TeamTactics;
   awayTactics?: TeamTactics;
+  /** override the home/away shape: a built-in name OR a custom Slot[] (user
+   * design). Falls back to the TeamDef.formation if omitted. */
+  homeFormation?: string | Slot[];
+  awayFormation?: string | Slot[];
   weather?: Weather;
   neutral?: boolean;
 }
@@ -65,6 +70,7 @@ interface Player {
   starter: boolean; // started the match (vs came off the bench)
   markName: string | null; // individual instruction: opponent name or Role to man-mark
   tightMark: boolean; // stick especially tight to the marked man
+  instr: PlayerInstructions; // the full per-player instruction set (roam/shoot/cross/…)
   duty: Duty; // defend / support / attack — how far he commits forward
   roleName: string; // derived tactical role label for the UI (e.g. "Inverted Winger")
   stat: PlayerStat;
@@ -257,11 +263,18 @@ export class Match {
   redCards = 0;
   subsMade = 0;
   shotDist: number[] = []; // diagnostic: distance-to-goal of each shot
+  shotSideByTeam: [number[], number[]] = [[], []]; // y-offset (+=right of centre) of each shot, by team
   private bench: [Player[], Player[]] = [[], []];
   private subsUsed: [number, number] = [0, 0];
   private static MAX_SUBS = 5;
   private subScanTimer = 0;
+  /** transition tracking: which team most recently WON the ball, and when — used
+   * by counter-press (the side that just lost it swarms) and counter-attack (the
+   * side that just won it breaks). */
+  private winBallTeam: 0 | 1 | null = null;
+  private winBallTime = -99;
   private tactics: [TeamTactics, TeamTactics];
+  private fmOverride: [string | Slot[] | undefined, string | Slot[] | undefined] = [undefined, undefined];
   private weather: Weather;
   private wx: WeatherMods;
   private edge: HomeEdge;
@@ -286,6 +299,7 @@ export class Match {
       setup.homeTactics ?? tacticsForStyle("balanced"),
       setup.awayTactics ?? tacticsForStyle("balanced"),
     ];
+    this.fmOverride = [setup.homeFormation, setup.awayFormation];
     this.weather = setup.weather ?? "clear";
     this.wx = weatherMods(this.weather);
     this.edge = homeEdge(setup.neutral ?? false);
@@ -341,6 +355,7 @@ export class Match {
         starter,
         markName: pd.instructions?.mark ?? null,
         tightMark: pd.instructions?.tightMark ?? false,
+        instr: pd.instructions ?? {},
         duty: pd.duty ?? defaultDuty(role),
         roleName: roleLabel(role, pd.duty ?? defaultDuty(role), new Set(pd.traits ?? [])),
         stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
@@ -348,7 +363,7 @@ export class Match {
     };
     for (const teamIdx of [0, 1] as const) {
       const def = teamIdx === 0 ? this.home : this.away;
-      const slots: Slot[] = FORMATIONS[def.formation] ?? FORMATIONS["4-3-3"]!;
+      const slots: Slot[] = resolveFormation(this.fmOverride[teamIdx], def.formation);
       // away side starts marginally more fatigued from travel (home advantage)
       const startCond = teamIdx === 0 ? 1.0 : 1.0 - this.edge.awayTravelPenalty;
       def.players.forEach((pd, i) => {
@@ -373,6 +388,74 @@ export class Match {
 
   private tac(team: 0 | 1): TeamTactics {
     return this.tactics[team];
+  }
+
+  /** Record that `team` has the ball; if this is a CHANGE of possession, stamp
+   * the time so the transition window (counter-press / counter-attack) opens. */
+  private notePossession(team: 0 | 1): void {
+    if (this.winBallTeam !== team) {
+      this.winBallTeam = team;
+      this.winBallTime = this.time;
+    }
+  }
+
+  /** Seconds since `team` won the ball, while it still holds it (else huge). */
+  private sinceWon(team: 0 | 1): number {
+    return this.winBallTeam === team ? this.time - this.winBallTime : 1e9;
+  }
+
+  // ---- live control API (the UI manages tactics during the match) ----
+
+  /** Replace a side's team instructions live (sliders/preset change). The engine
+   * reads `tac(team)` every tick, so the change takes effect immediately. */
+  setTactics(team: 0 | 1, tactics: TeamTactics): void {
+    this.tactics[team] = tactics;
+  }
+
+  /** Read the current team instructions (so the UI can show live values). */
+  getTactics(team: 0 | 1): TeamTactics {
+    return this.tactics[team];
+  }
+
+  private findPlayer(team: 0 | 1, ident: string | number): Player | undefined {
+    return this.players.find(
+      (p) => p.team === team && (p.number === ident || p.name === ident),
+    );
+  }
+
+  /** Update one player's instructions live (by shirt number or name). */
+  setPlayerInstruction(team: 0 | 1, ident: string | number, patch: PlayerInstructions): void {
+    const p = this.findPlayer(team, ident);
+    if (!p) return;
+    p.instr = { ...p.instr, ...patch };
+    p.markName = p.instr.mark ?? null;
+    p.tightMark = p.instr.tightMark ?? false;
+    p.roleName = roleLabel(p.role, p.duty, p.traits);
+  }
+
+  /** Change a player's duty (defend/support/attack) live. */
+  setDuty(team: 0 | 1, ident: string | number, duty: Duty): void {
+    const p = this.findPlayer(team, ident);
+    if (!p) return;
+    p.duty = duty;
+    p.roleName = roleLabel(p.role, duty, p.traits);
+  }
+
+  /** Re-shape a side live (built-in name or custom Slot[]). Reassigns each
+   * on-pitch player's resting position and role to the new shape, in order. */
+  setFormation(team: 0 | 1, spec: string | Slot[]): void {
+    const fallback = (team === 0 ? this.home : this.away).formation;
+    const slots = resolveFormation(spec, fallback);
+    const onPitch = this.players.filter((p) => p.team === team);
+    for (let i = 0; i < onPitch.length && i < slots.length; i++) {
+      const p = onPitch[i]!;
+      const slot = slots[i]!;
+      const base = team === 0 ? { ...slot.pos } : mirror(slot.pos);
+      p.base = base;
+      p.role = slot.role;
+      p.duty = p.instr ? p.duty : defaultDuty(slot.role);
+      p.roleName = roleLabel(slot.role, p.duty, p.traits);
+    }
   }
 
   /** Current top speed, reduced by fatigue, lifted briefly after beating a man. */
@@ -573,6 +656,9 @@ export class Match {
       .filter((p) => p.team === kickingTeam && p.role !== "GK")
       .sort((a, b) => dist(a.base, CENTER) - dist(b.base, CENTER))[0]!;
     this.ball.owner = central;
+    // a kick-off restart is not a "won ball" transition — clear the break window
+    this.winBallTeam = kickingTeam;
+    this.winBallTime = -99;
     if (matchStart) {
       this.emit("kickoff", undefined, undefined, "Kick-off!");
     }
@@ -753,30 +839,46 @@ export class Match {
       // ball. Out of possession an attack-duty player (overlapping full-back,
       // box-to-box mid) RECOVERS to his station — otherwise the side is left
       // wide open on the counter (this was making attacking sides concede heaps).
+      // INDIVIDUAL INSTRUCTIONS: get-forward pushes on like an attack duty;
+      // hold-position keeps him disciplined; roam lets him drift more to the ball.
+      const pi = p.instr;
+      const getsFwd = pi.getForward === true;
+      const holds = pi.holdPosition === true;
       const dutyPush =
-        p.duty === "attack" ? (attacking ? 1.12 : 0.95) : p.duty === "defend" ? 0.82 : 1.0;
+        (p.duty === "attack" || getsFwd) ? (attacking ? 1.12 : 0.95) : p.duty === "defend" ? 0.82 : 1.0;
       // the static forward nudge (overlap) only applies to deeper players when
       // actually attacking; defend-duty players sit a touch deeper always.
-      const dutyAdvance =
-        !fwd && attacking && p.duty === "attack"
+      let dutyAdvance =
+        !fwd && attacking && (p.duty === "attack" || getsFwd)
           ? dir * 5
           : p.duty === "defend"
             ? dir * -3
             : 0;
-      const pull = (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line * dutyPush;
-      const lineShift = dir * (t.lineHeight - 0.5) * 24 + dutyAdvance;
+      if (holds) dutyAdvance = p.duty === "defend" ? dir * -3 : 0; // stay put
+      // OFFSIDE TRAP: out of possession the back line steps up sharply to catch
+      // runners, trading depth for offsides won (and risk if it's beaten).
+      const trapStep = !attacking && def ? dir * t.offsideTrap * 7 : 0;
+      const roam = pi.roam === true;
+      const pull =
+        (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line * dutyPush * (roam ? 1.22 : 1) * (holds ? 0.8 : 1);
+      const lineShift = dir * (t.lineHeight - 0.5) * 24 + dutyAdvance + trapStep;
       // wide players hold the touchline to stretch play; everyone else can be
       // pulled toward the ball, but only gently, so the team doesn't bunch up
       const widthFactor = (0.7 + 0.6 * t.width) * (wideRole ? 1.2 : 1.0);
-      const ballYPull = wideRole ? 0.06 : 0.14;
+      const ballYPull = (wideRole ? 0.06 : 0.14) * (roam ? 1.5 : 1);
       // per-player wandering so players drift into space individually rather than
       // moving as one rigid block — two out-of-phase waves give a less robotic,
       // more natural check-and-move, in both axes.
-      const driftY = Math.sin(this.time * 0.45 + p.id * 1.7) * 4 + Math.cos(this.time * 0.27 + p.id * 2.3) * 3;
-      const driftX = Math.cos(this.time * 0.33 + p.id * 1.1) * 3;
+      const driftAmp = (holds ? 0.5 : roam ? 1.4 : 1);
+      const driftY = (Math.sin(this.time * 0.45 + p.id * 1.7) * 4 + Math.cos(this.time * 0.27 + p.id * 2.3) * 3) * driftAmp;
+      const driftX = Math.cos(this.time * 0.33 + p.id * 1.1) * 3 * driftAmp;
+      // FOCUS PLAY: when attacking, the side funnels toward the favoured flank
+      // (-1 left/low-y .. +1 right/high-y). Sign chosen so shots emerge on the
+      // labelled side once the opposition has shifted across.
+      const focusShift = attacking ? -t.focusPlay * 12 : 0;
       const tx = p.base.x + (b.pos.x - CENTER.x) * pull + lineShift + driftX;
       const ty =
-        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + driftY;
+        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + driftY + focusShift;
       p.target = clampPitch({
         // outfielders stay off both goal lines — never on/behind them (no pile-up)
         x: clamp(tx, 5, PITCH_LENGTH - 5),
@@ -792,19 +894,28 @@ export class Match {
       const dT = this.tac(defTeam);
       const ownGoalX = defTeam === 0 ? 0 : PITCH_LENGTH;
       const ballDepth = Math.abs(b.pos.x - ownGoalX);
-      const engageRange = 35 + dT.pressing * 60 + dT.lineHeight * 15;
+      // COUNTER-PRESS: in the seconds after losing the ball, a high counter-press
+      // swarms to win it back (more bodies, further up); a low one drops & regroups.
+      const justLost = this.sinceWon(possTeam) < 3.5; // defTeam lost it <3.5s ago
+      const cpBoost = justLost ? (dT.counterPress - 0.5) * 2 : 0; // -1..+1 → range/closers
+      const engageRange = 35 + dT.pressing * 60 + dT.lineHeight * 15 + cpBoost * 24;
       // in the defensive third the side MUST engage regardless of pressing
       // tactic — you don't let a man stroll into your box. At least two close
       // down (the presser + a cover), more with a high press.
       const inDanger = ballDepth < 30;
-      const closers = inDanger
+      let closers = inDanger
         ? Math.max(2, 1 + Math.round(dT.pressing * 2))
         : ballDepth < engageRange
           ? 1 + Math.round(dT.pressing * 2)
           : 1;
+      closers = clamp(closers + Math.round(cpBoost), 1, 5);
+      // players told to close down LESS are kept out of the press rotation
+      const noPress = this.players.filter(
+        (p) => p.team === defTeam && p.instr.closeDown === "less",
+      );
       const pressers: Player[] = [];
       for (let i = 0; i < closers; i++) {
-        const d = this.nearestOutfield(defTeam, b.pos, pressers);
+        const d = this.nearestOutfield(defTeam, b.pos, pressers.concat(noPress));
         if (!d) break;
         pressers.push(d);
         if (i === 0) {
@@ -812,6 +923,15 @@ export class Match {
         } else {
           const off = norm(sub(d.pos, b.pos));
           d.target = clampPitch({ x: b.pos.x + off.x * 5, y: b.pos.y + off.y * 5 });
+        }
+      }
+      // players told to close down MORE jump the carrier when within range,
+      // on top of the team's press (an aggressive individual harrier).
+      for (const p of this.players) {
+        if (p.team !== defTeam || p.role === "GK" || pressers.includes(p)) continue;
+        if (p.instr.closeDown === "more" && dist(p.pos, b.pos) < 16) {
+          p.target = { ...b.pos };
+          pressers.push(p);
         }
       }
 
@@ -931,25 +1051,27 @@ export class Match {
       if (teamInAttack) {
         const lo = adir > 0 ? 50 : 5;
         const hi = adir > 0 ? 100 : 55;
+        // on a counter-attack break the runners go earlier and more often
+        const brk = this.sinceWon(possTeam) < 3 ? Math.max(0, this.tac(possTeam).counterAttack - 0.5) : 0;
         for (const p of this.players) {
           if (p.team !== possTeam || p === b.owner) continue;
           const fwd = p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
           // a single forward-running midfielder may join late ("gets forward"),
           // but most midfielders stay to support so the shape doesn't collapse
-          const lateRunner = p.role === "MC" && p.traits.has("gets_forward");
+          const lateRunner = (p.role === "MC" && p.traits.has("gets_forward")) || p.instr.getForward === true;
           if (!fwd && !lateRunner) continue;
-          const eager = p.traits.has("runs_in_behind");
+          const eager = p.traits.has("runs_in_behind") || p.instr.getForward === true;
           if (!fwd && !eager && p.attrs.offTheBall < 15) continue;
           // make the run in bursts, not constantly — timing scales with movement
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
-          if (phase < (eager ? 0.45 : 0.65)) continue;
+          if (phase < (eager ? 0.45 : 0.65) - brk * 0.5) continue;
           // forward-running mids arrive at the TOP of the box (cut-back zone),
           // staying behind the last line; forwards run beyond it
           const depth = lateRunner ? -4 : 1 + p.attrs.offTheBall * 0.07;
           const targetX = clamp(lineX + adir * depth, lo, hi);
           // wide players hold a wider line (back-post threat); others come central
           const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
-          const targetY = clamp(34 + (p.pos.y - 34) * pullCentral, 8, 60);
+          const targetY = clamp(34 + (p.pos.y - 34) * pullCentral - this.tac(possTeam).focusPlay * 9, 8, 60);
           p.target = clampPitch({ x: targetX, y: targetY });
         }
       }
@@ -1039,32 +1161,46 @@ export class Match {
     if (press < 1.3 && owner.role !== "GK" && challenger) {
       const ca = challenger.attrs;
       const oa = owner.attrs;
+      // TACKLING intensity (team knob + individual "tackle harder") and a
+      // COUNTER-PRESS swarm right after the challenger's side lost the ball. The
+      // base tackle/foul rates are clamped, so these are applied as multipliers
+      // AFTER the clamp (otherwise the caps mask them). All neutral at 0.5.
+      const dTac = this.tac(challenger.team).tackling;
+      const harder = challenger.instr.tackleHarder === true;
+      const justLostC = this.sinceWon(owner.team) < 3.5; // challenger's side just lost it
+      const swarm = justLostC ? 1 + (this.tac(challenger.team).counterPress - 0.5) * 0.8 : 1;
+      const winAggro = (0.8 + 0.4 * dTac) * (harder ? 1.12 : 1) * swarm; // 0.5/none → 1.0
+      const foulAggro = (0.55 + 0.9 * dTac) * (harder ? 1.25 : 1); // 0.5/none → 1.0
       const tackleSkill =
         (ca.tackling + ca.aggression * 0.4 + ca.strength * 0.3) * this.sharp(challenger);
       const retain =
         (oa.dribbling + oa.balance * 0.4 + oa.composure * 0.3) * this.sharp(owner) *
         (owner.dribbleTimer > 0 ? 1.4 : 1); // hard to dispossess mid-burst
-      const p = clamp(0.004, 0.06, 0.018 * (tackleSkill / retain));
+      const p = clamp(0.004, 0.06, 0.018 * (tackleSkill / retain)) * winAggro;
       if (this.rng.chance(p)) {
         this.turnover(challenger, "tackle");
         return;
       }
       // a mistimed / cynical challenge concedes a foul. This runs every tick a
       // defender is tight, so the per-tick probability must be tiny (it adds up
-      // to ~20-25 fouls a match). Aggressive, less clean tacklers give away more.
+      // to ~20-25 fouls a match). Aggressive, less clean tacklers give away more,
+      // and a side told to get stuck in (or to tackle harder) gives away more.
       let foulP = clamp(0.00006, 0.0035, 0.0021 * (ca.aggression / 12) * (12 / (ca.tackling + 4)));
       if (this.inFinalThird(owner)) foulP *= 1.3;
       if (this.inBoxAttacking(owner)) foulP *= 0.05; // defenders are very careful in the box
+      foulP *= foulAggro;
       if (this.rng.chance(foulP)) {
         this.commitFoul(challenger, owner);
         return;
       }
     }
 
-    // periodic decision — per-player cadence (a "slice"), quicker at high tempo
+    // periodic decision — per-player cadence (a "slice"), quicker at high tempo.
+    // On a counter-attack break the carrier decides faster still (snap forward).
     owner.decisionTimer -= DT;
     if (owner.decisionTimer > 0) return;
-    owner.decisionTimer = 0.45 - 0.2 * t.tempo; // ~0.25-0.45s
+    const breaking = this.sinceWon(owner.team) < 3 ? Math.max(0, t.counterAttack - 0.5) : 0;
+    owner.decisionTimer = (0.45 - 0.2 * t.tempo) * (1 - breaking * 0.3); // ~0.22-0.45s
 
     const goal = this.oppGoal(owner.team);
     const dGoal = dist(owner.pos, goal);
@@ -1082,7 +1218,10 @@ export class Match {
     // and angle (central beats a tight byline angle); space and finishing scale
     // it up. Flair makes a player more willing to try from distance.
     const fromDistance = owner.traits.has("shoots_from_distance");
-    const inRange = dGoal < 20 + this.directness(owner.team) * 4 + (fromDistance ? 6 : 0);
+    const inRange =
+      dGoal <
+      20 + this.directness(owner.team) * 4 + (t.shootOnSight - 0.5) * 10 +
+        (fromDistance ? 6 : 0) + (owner.instr.shoot === "more" ? 5 : 0);
     let goodChance = false;
     if (inRange) {
       const shootAttr =
@@ -1104,6 +1243,9 @@ export class Match {
       if (space < 2.2) shotProb *= 0.45;
       else if (space < 3.2) shotProb *= 0.75;
       shotProb *= 0.85 + 0.3 * t.mentality;
+      shotProb *= 0.55 + 0.9 * t.shootOnSight; // shoot-on-sight vs work into box
+      if (owner.instr.shoot === "more") shotProb *= 1.4;
+      else if (owner.instr.shoot === "less") shotProb *= 0.5;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
       // unmarked floors (space-gated) — a clear sight of goal
@@ -1140,6 +1282,9 @@ export class Match {
       let want = 0.004 + (owner.attrs.dribbling / 20) * 0.012 + (owner.attrs.flair / 20) * 0.01;
       if (owner.traits.has("likes_to_dribble")) want += 0.025;
       if (this.inFinalThird(owner)) want *= 1.3; // commit more in dangerous areas
+      want *= 0.7 + 0.6 * t.creativeFreedom; // expressive sides take more men on
+      if (owner.instr.dribble === "more") want *= 1.7;
+      else if (owner.instr.dribble === "less") want *= 0.35;
       if (this.rng.chance(want)) {
         this.attemptTakeOn(owner, challenger);
         return;
@@ -1156,6 +1301,8 @@ export class Match {
       const boxTarget = this.bestBoxTarget(owner);
       if (boxTarget) {
         let crossProb = 0.03 + (owner.attrs.crossing / 20) * 0.05 + t.width * 0.03;
+        if (owner.instr.cross === "more") crossProb *= 1.7;
+        else if (owner.instr.cross === "less") crossProb *= 0.4;
         if (atByline) crossProb = Math.max(crossProb, 0.1);
         if (this.rng.chance(crossProb)) {
           this.cross(owner, boxTarget);
@@ -1227,10 +1374,19 @@ export class Match {
     space: number,
   ): { target: Player; type: PassType } | null {
     const goal = this.oppGoal(owner.team);
-    const D = this.directness(owner.team);
+    const t = this.tac(owner.team);
+    // per-player + transition adjustments to directness: a player told to play
+    // more direct/shorter shifts his own ambition; on a counter-attack break the
+    // whole side plays more directly to spring the runners.
+    const breaking = this.sinceWon(owner.team) < 3 ? Math.max(0, t.counterAttack - 0.5) : 0;
+    let D = this.directness(owner.team);
+    if (owner.instr.passDirectness === "direct") D = clamp(D + 0.18, 0, 1);
+    else if (owner.instr.passDirectness === "shorter") D = clamp(D - 0.18, 0, 1);
+    D = clamp(D + breaking * 0.4, 0, 1);
+    const cf = t.creativeFreedom; // expressiveness → more ambitious through-balls
     const oa = owner.attrs;
-    const sees = oa.vision / 20; // 0..1 chance of spotting the ambitious option
-    const maxD = 26 + 34 * D + oa.vision * 0.5;
+    const sees = (oa.vision / 20) * (0.6 + 0.8 * cf); // spotting the ambitious option
+    const maxD = 26 + 34 * D + oa.vision * 0.5 + breaking * 8;
     let best: { target: Player; type: PassType } | null = null;
     let bestScore = -Infinity;
 
@@ -1272,7 +1428,9 @@ export class Match {
         type === "through" ? 8 : type === "lofted" ? 9 : type === "chip" ? 11 : type === "driven" ? 3 : 0;
       const riskPenalty = typeRisk * (1 - skill / 20);
       const progress =
-        advancement >= 0 ? advancement * (1.0 + 0.6 * D) : advancement * 1.7; // backward hurts
+        advancement >= 0
+          ? advancement * (1.0 + 0.6 * D) * (1 + breaking * 0.8) // break = pour forward
+          : advancement * 1.7; // backward hurts
       const score =
         progress +
         openness * (0.8 - 0.45 * D) +
@@ -1600,6 +1758,7 @@ export class Match {
     this.shots[shooter.team]++;
     this.shotTypeCounts[type]++;
     this.shotDist.push(dGoal);
+    this.shotSideByTeam[shooter.team].push(shooter.pos.y - 34);
 
     const n = shooter.name;
     const line =
@@ -1629,6 +1788,7 @@ export class Match {
     this.ball.offsideFlag = null;
     this.ball.lastTeam = winner.team;
     this.ball.cooldown = 0;
+    this.notePossession(winner.team);
     // only a fraction of micro-duels count as a "tackle won" for the stat sheet
     if (kind === "tackle" && this.crng.chance(0.12)) winner.stat.tackles++;
     // a committed tackle occasionally leaves the tackler with a knock (rare)
@@ -1760,6 +1920,7 @@ export class Match {
     b.judged = false;
     b.offsideFlag = null;
     b.lastTeam = p.team;
+    this.notePossession(p.team);
   }
 
   private resolveLooseBall(): void {

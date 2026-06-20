@@ -60,6 +60,24 @@ export interface PlayerInstructions {
   mark?: string;
   /** stick especially tight to the marked man (less space, but easier to lose) */
   tightMark?: boolean;
+  /** roam from position — drift further toward the ball/space off the ball */
+  roam?: boolean;
+  /** individual pressing: close down the ball more (or less) than the team line */
+  closeDown?: "more" | "less";
+  /** attempt take-ons more (or less) often than his attributes alone suggest */
+  dribble?: "more" | "less";
+  /** pull the trigger more (or less) — shoot on sight vs work it to a teammate */
+  shoot?: "more" | "less";
+  /** look to cross more (or less) from wide areas */
+  cross?: "more" | "less";
+  /** bias his passing shorter/safer or more direct/ambitious than the team */
+  passDirectness?: "shorter" | "direct";
+  /** push forward to join attacks (overlap/late run) even off attack duty */
+  getForward?: boolean;
+  /** hold position — stay disciplined, don't push out of shape */
+  holdPosition?: boolean;
+  /** get tighter/harder into challenges (more tackles won, more fouls) */
+  tackleHarder?: boolean;
 }
 
 /**
