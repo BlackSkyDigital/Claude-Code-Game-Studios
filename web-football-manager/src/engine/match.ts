@@ -491,8 +491,11 @@ export class Match {
       this.sendOff(fouler, true);
       return;
     }
-    let yellowP = 0.055 + fouler.attrs.aggression / 200;
-    if (dangerous) yellowP += 0.08; // stopping a promising move
+    let yellowP = 0.05 + fouler.attrs.aggression / 220;
+    if (dangerous) yellowP += 0.07; // stopping a promising move
+    // a player already on a yellow is booked again far less readily — refs (and
+    // the player) are wary of a second — so second-yellow reds stay rare
+    if (fouler.yellow) yellowP *= 0.3;
     if (this.rng.chance(yellowP)) {
       if (fouler.yellow) this.sendOff(fouler, false);
       else {
@@ -711,10 +714,10 @@ export class Match {
           Math.abs(p.pos.y - 34) > 9 &&
           p.dribbleTimer <= 0
         ) {
-          const aimX = p.team === 0 ? 90 : 15;
-          const aimY = 34 + (p.pos.y > 34 ? 6 : -6);
+          const aimX = p.team === 0 ? 88 : 17;
+          const aimY = 34 + (p.pos.y > 34 ? 12 : -12); // half-space, not fully central
           const dir = norm(sub({ x: aimX, y: aimY }, p.pos));
-          p.target = clampPitch({ x: p.pos.x + dir.x * 8, y: p.pos.y + dir.y * 8 });
+          p.target = clampPitch({ x: p.pos.x + dir.x * 6, y: p.pos.y + dir.y * 6 });
           continue;
         }
         const dir = norm(sub(g, p.pos));
@@ -1084,18 +1087,20 @@ export class Match {
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
       const inBox = this.inBoxAttacking(owner);
       let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.008;
-      // close to goal a striker shoots even under pressure; only heavily penalise
-      // being crowded out from range
-      if (space < 2.5) shotProb *= dGoal < 11 ? 0.8 : 0.5;
+      // crowded out: you can't get a clean shot away with a man on you — lay it
+      // off / cut it back instead of blazing (this was killing the striker's
+      // conversion, since he shot constantly from crowded box positions)
+      if (space < 2.2) shotProb *= 0.45;
+      else if (space < 3.2) shotProb *= 0.75;
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
       // unmarked floors (space-gated) — a clear sight of goal
       if (dGoal < 14 && angle > 0.6 && space > 6) shotProb = Math.max(shotProb, 0.08);
       if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
-      // IN THE BOX: more willing to shoot (a multiplier, not a flat floor — so it
-      // scales with how good the chance is and doesn't spray shots while dwelling)
-      if (inBox) shotProb *= 1.7;
+      // IN THE BOX with at least half a yard: more willing to shoot (a multiplier,
+      // scaled by chance quality — but a crowded player still won't blaze it)
+      if (inBox && space > 2.2) shotProb *= 1.85;
       goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
@@ -1293,8 +1298,10 @@ export class Match {
       const aerial = (p.attrs.heading + p.attrs.jumpingReach) / 2;
       // reward the player who's actually free (back-post winger, arriving
       // midfielder) rather than always hammering it at the central striker
+      // the striker is the focal point in the box — aim for him a bit more
+      const focal = p.role === "ST" ? 5 : p.role === "AM" ? 2 : 0;
       const score =
-        central * 7 + openness * 1.6 + aerial * 0.4 + p.attrs.offTheBall * 0.15 - dist(p.pos, goal) * 0.18;
+        central * 7 + openness * 1.6 + aerial * 0.4 + p.attrs.offTheBall * 0.15 + focal - dist(p.pos, goal) * 0.18;
       if (score > bestScore) {
         bestScore = score;
         best = p;
