@@ -66,7 +66,10 @@ Levers TESTED and rejected (kept here so we don't repeat them):
 ## Comparison study (tactics × teams × formations) — `tools/`
 
 Harnesses: `dash.mjs` (metrics vs real ranges), `tactics.mjs` (each style vs
-balanced), `teams.mjs` (round robin), `formations.mjs` (each formation vs 4-3-3).
+balanced), `teams.mjs` (round robin), `formations.mjs` (each formation vs 4-3-3),
+`players.mjs` (swap/remove key players & measure impact),
+`matrix.mjs [N]` (full tactics head-to-head grid, every style home vs every
+style away — pass N seeds, default 8).
 
 Findings & fixes from the study:
 - **Tactics** — possession styles were *losing* to balanced (a safe pass was as
@@ -80,6 +83,56 @@ Findings & fixes from the study:
 - **Formations** — slot now drives the player's role, so formation genuinely
   changes the side. Added 4-2-3-1 / 3-5-2 / 5-3-2. They play distinctly
   (4-2-3-1 open, 3-5-2 solid, etc.).
+
+### Tactics head-to-head matrix (`tools/matrix.mjs 20`, MCI v LIV, 20 seeds)
+
+Avg goal diff from the home row's perspective:
+
+```
+home\away   bal   tiki  gegen ctrl  cntr  r-one cat
+bal        +0.6  +1.0  +0.7  +1.3  +0.3  +1.9  -0.3
+tiki       +1.3  +0.5  +1.1  +1.1  +0.0  +1.3  +0.8
+gegen      +1.6  +1.1  +1.8  +1.6  +0.1  +1.3  +0.6
+ctrl       -0.3  +0.1  +0.5  +0.1  -0.1  +0.8  +0.7
+cntr       +0.8  +0.2  +2.0  +0.8  +0.4  +0.8  +0.1
+r-one      +0.1  +0.1  +0.6  +0.6  +0.1  +0.0  -0.4
+cat        +0.7  +0.6  +0.9  +0.8  +0.1  +1.1  +0.3
+```
+
+The matchups come out realistically and are the strongest validation that the
+tactical layer is behaving like real football:
+
+- **Counter is the antidote to the press.** `cntr v gegen = +2.0`; counter *away*
+  holds gegenpress *home* to `+0.1` (the one thing that stops it). Counter also
+  edges/holds both possession styles (`ctrl v cntr = -0.1`, `tiki v cntr = 0.0`).
+- **A deep block frustrates the press.** Catenaccio limits gegenpress to `+0.6`
+  at home and beats it `+0.9` when catenaccio is home.
+- **Possession breaks the block.** tiki/gegen/ctrl all beat catenaccio; the deep
+  block only nicks results against sides that half-commit (balanced, counter).
+- **Route-one is weakest** — `r-one v r-one = 0.0` (crude long-ball negates home
+  rhythm) and it is thrashed away.
+- **Home edge is a constant ~+0.5–0.6** across all seven mirror matchups — it
+  does *not* compound with tactic.
+
+**Key emergent insight (not a bug — verified via neutral-venue runs):** open
+tactics *amplify* squad-quality gaps while defensive tactics *compress* them.
+Neutral-venue mirrors of MCI (better squad) v LIV: balanced `1.4–1.5` shots
+`15–14` (quality barely expressed, low-event) vs gegenpress `3.5–2.3` shots
+`29–27` (quality strongly expressed, high-event). This is exactly the real-world
+rationale for a weaker side parking the bus — a tight, low-event game compresses
+the favourite's edge; an open end-to-end game lets the better team win bigger. So
+the gegenpress mirror reading `+1.8` is squad quality (`+1.2`) + home edge
+(`+0.6`), not an inflated home advantage. No engine change needed.
+
+### Player & team alternation (verified)
+
+- **Teams** separate by squad quality (round robin, balanced): RMA 1.77 ppg
+  (+31) > MCI 1.33 (−4) ≈ ARS 1.33 (−3) > LIV 1.02 (−24).
+- **Individual players swing results** (MCI variants v LIV, `tools/players.mjs`):
+  full XI `8-3-5`; **remove Haaland → `3-1-12`** (can't win without the striker);
+  remove De Bruyne → `6-2-8` (creativity); remove Rodri → concede more; weak both
+  CBs → 23 shots against; weak XI `0-0-16` (0.3–3.7); star XI dominant
+  (2.25–1.31). The full quality range expresses on the pitch.
 
 Known edges (documented, not chased — fixing risks the calibrated baseline):
 - ball in-flight ~35% (pass-frequency limit of the model)
