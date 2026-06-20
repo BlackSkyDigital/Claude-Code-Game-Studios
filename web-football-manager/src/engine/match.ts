@@ -747,13 +747,20 @@ export class Match {
       const wideRole =
         p.role === "ML" || p.role === "MR" || p.role === "DL" || p.role === "DR";
       const line = fwd ? 1.25 : def ? 0.8 : 1.05;
-      // DUTY: per-player attacking commitment. Attack duty pushes higher and
-      // joins attacks (an overlapping wing-back); defend duty holds station.
-      const dutyPush = p.duty === "attack" ? 1.12 : p.duty === "defend" ? 0.82 : 1.0;
-      // the static forward nudge applies only to DEEPER players joining the
-      // attack (an overlapping wing-back / box-to-box mid). Forwards already
-      // start high; pushing them up further just leaves them camped offside.
-      const dutyAdvance = fwd ? 0 : dir * (p.duty === "attack" ? 5 : p.duty === "defend" ? -3 : 0);
+      // DUTY: per-player attacking commitment, but ONLY when his team has the
+      // ball. Out of possession an attack-duty player (overlapping full-back,
+      // box-to-box mid) RECOVERS to his station — otherwise the side is left
+      // wide open on the counter (this was making attacking sides concede heaps).
+      const dutyPush =
+        p.duty === "attack" ? (attacking ? 1.12 : 0.95) : p.duty === "defend" ? 0.82 : 1.0;
+      // the static forward nudge (overlap) only applies to deeper players when
+      // actually attacking; defend-duty players sit a touch deeper always.
+      const dutyAdvance =
+        !fwd && attacking && p.duty === "attack"
+          ? dir * 5
+          : p.duty === "defend"
+            ? dir * -3
+            : 0;
       const pull = (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line * dutyPush;
       const lineShift = dir * (t.lineHeight - 0.5) * 24 + dutyAdvance;
       // wide players hold the touchline to stretch play; everyone else can be
