@@ -48,20 +48,34 @@ points spread match real life closely.
 - The calibrated single-match baseline (`dash.mjs`, Man City v Liverpool) stays
   in/near its real ranges throughout.
 
-## Known limitation (documented, not yet solved)
+## Known limitation (documented, with a precise diagnosis)
 
-**Golden boot is too high (~39 vs real ~28), and midfielders score too rarely
-(~3% vs real ~20%).** The engine concentrates goals on the top one or two
-front-line players: it always funnels the best chance to the best-placed attacker,
-and central midfielders rarely arrive in—or are found in—the box. The *total*
-goals/game is realistic, so the same goals pile onto fewer players, inflating the
-top-scorer tallies. Levers tried without success (each re-verified over 3 seasons):
-reducing the focal-striker bias, the in-box shot multiplier, the clear-chance
-floors, the through-ball "spring", and compressing elite finishing accuracy — all
-either failed to move it or cost league scoring. A real fix needs **midfield goal
-participation** (late runs that actually receive and finish, plus more long-range
-midfield shooting) so goals spread across ~15-18 scorers per team as in reality.
-Tracked as the next structural improvement.
+**Golden boot is too high (~39 vs real ~28); goals over-concentrate on the wide
+forwards.** Use `tools/roles.mjs` to see it: goals split ~ST 34% / **wide
+(wingers+AM) 58%** / midfield 3% / defenders 3-7%, versus real ~ST 33 / wide 27 /
+mid 22 / def 14. The *total* goals/game is realistic, so the same goals piling
+onto two inverted wingers inflates the top scorer.
+
+Root cause (diagnosed, not just guessed): the wide forwards' goals come mostly
+from **automatic first-time finishes off crosses and cut-backs** — a code path
+that the open-play shot-probability never touches. So the usual levers do nothing
+to it. Verified ineffective/own-goal over 40-match probes and 3-season runs:
+reducing winger shot probability and the clear-chance floors (no change — those
+are open-play only); focal-striker bias, in-box multiplier, through-ball spring,
+elite-finishing compression (no move or cost league scoring); forcing cut-backs
+to arriving midfielders (destabilised the sim to ~5 g/g via a cut-back→rebound
+feedback loop, and the cut-backs still went to wingers, not midfielders — the
+spatial model rarely puts central midfielders in finishing positions).
+
+A real fix is a **chance-creation rework**, not a probability tweak: (1) make
+`bestBoxTarget` / cut-back targeting distribute across the striker and arriving
+central midfielders instead of repeatedly the same wide forward, (2) get central
+midfielders into the box as genuine receivers, and (3) damp the auto first-time
+cross/cut-back conversion. This is a larger, higher-risk change (every quick
+attempt destabilised the calibrated baseline), so it is scoped as the next
+structural pass rather than rushed. Grounding ratings in real API data
+(`tools/fetch-real.mjs`, once the host is allowlisted) would also help, since
+some of the concentration is squad-rating driven (one elite winger per top team).
 
 ## Grounding in real data (API-Football)
 
