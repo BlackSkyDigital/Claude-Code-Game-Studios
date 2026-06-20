@@ -1111,7 +1111,7 @@ export class Match {
       if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
       // IN THE BOX with at least half a yard: more willing to shoot (a multiplier,
       // scaled by chance quality — but a crowded player still won't blaze it)
-      if (inBox && space > 2.2) shotProb *= 1.45;
+      if (inBox && space > 2.2) shotProb *= 1.5;
       goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
@@ -1790,7 +1790,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.94, (0.4 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.42 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
@@ -1918,6 +1918,11 @@ export class Match {
     // (balanced D=0.5 → ~0.55, unchanged; tiki-taka ~0.48; route-one ~0.62).
     if (b.lastTeam !== null && b.lastTeam !== claimant.team) {
       controlProb *= 0.45 + this.directness(b.lastTeam) * 0.2;
+    } else if (b.passer && b.passer !== claimant) {
+      // a well-weighted ball from a good passer is easier to control and keep —
+      // so a world-class passer's side retains possession better (and losing him
+      // means more giveaways). Centred so the average passer is neutral.
+      controlProb *= 0.9 + b.passer.attrs.passing / 170;
     }
     controlProb = clamp(controlProb, 0.15, 0.95);
     if (!this.rng.chance(controlProb)) return;
@@ -1932,6 +1937,18 @@ export class Match {
         claimant.assistFrom = passer; // remember who fed me (for assists)
         // a key pass = a through ball / cross that finds a teammate in the final third
         if (wasKey && this.inFinalThird(claimant)) passer.stat.keyPasses++;
+        // CREATIVITY: a defence-splitting through ball from a high-vision passer
+        // RELEASES the runner — a yard of space, a clean look at goal. This is
+        // how a world-class playmaker (vision/passing) actually creates chances,
+        // so removing him noticeably reduces the side's quality chances.
+        if (
+          b.passType === "through" &&
+          this.inFinalThird(claimant) &&
+          claimant.role !== "GK"
+        ) {
+          const craft = passer.attrs.vision * 0.5 + passer.attrs.passing * 0.5;
+          if (this.rng.chance(craft / 26)) claimant.dribbleTimer = 1.1; // sprung clear
+        }
       }
     }
     if (fromOpponent && this.inFinalThird(claimant)) {
