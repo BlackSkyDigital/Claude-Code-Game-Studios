@@ -1052,7 +1052,7 @@ export class Match {
       // a mistimed / cynical challenge concedes a foul. This runs every tick a
       // defender is tight, so the per-tick probability must be tiny (it adds up
       // to ~20-25 fouls a match). Aggressive, less clean tacklers give away more.
-      let foulP = clamp(0.00005, 0.003, 0.0016 * (ca.aggression / 12) * (12 / (ca.tackling + 4)));
+      let foulP = clamp(0.00006, 0.0035, 0.0021 * (ca.aggression / 12) * (12 / (ca.tackling + 4)));
       if (this.inFinalThird(owner)) foulP *= 1.3;
       if (this.inBoxAttacking(owner)) foulP *= 0.05; // defenders are very careful in the box
       if (this.rng.chance(foulP)) {
@@ -1111,7 +1111,7 @@ export class Match {
       if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16);
       // IN THE BOX with at least half a yard: more willing to shoot (a multiplier,
       // scaled by chance quality — but a crowded player still won't blaze it)
-      if (inBox && space > 2.2) shotProb *= 1.55;
+      if (inBox && space > 2.2) shotProb *= 1.45;
       goodChance = closeness * angle > 0.35 || inBox;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
@@ -1790,7 +1790,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.94, (0.37 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.4 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
