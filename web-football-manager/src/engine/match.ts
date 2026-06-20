@@ -1903,9 +1903,13 @@ export class Match {
       }
     }
     // intercepting an opponent's pass cleanly is harder than collecting your
-    // own — this keeps possession with the passing side more often (realistic
-    // ~75-80% completion) rather than constant giveaways
-    if (b.lastTeam !== null && b.lastTeam !== claimant.team) controlProb *= 0.55;
+    // own — this keeps possession with the passing side. A SAFE pass from a
+    // low-directness (possession) side is harder to pick off than a risky direct
+    // ball, so possession styles actually keep the ball and stay competitive
+    // (balanced D=0.5 → ~0.55, unchanged; tiki-taka ~0.48; route-one ~0.62).
+    if (b.lastTeam !== null && b.lastTeam !== claimant.team) {
+      controlProb *= 0.45 + this.directness(b.lastTeam) * 0.2;
+    }
     controlProb = clamp(controlProb, 0.15, 0.95);
     if (!this.rng.chance(controlProb)) return;
     const completedPass = b.lastTeam === claimant.team;
