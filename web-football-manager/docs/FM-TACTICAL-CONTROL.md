@@ -94,6 +94,34 @@ gegenpress & counter are the strongest styles, control-possession the most
 passive, route-one weak vs deep/counter. Squad quality and home edge still
 dominate where they should.
 
+## Risk / reward and player suitability (the FM way)
+
+Settings are **not free upgrades** — the cost is *emergent* (the action interacts
+with the opponent), not a bolted-on penalty. And an instruction only helps if it
+**suits the player**, because we split *decision* (the instruction sets how often
+he does it) from *execution* (his attributes decide how well it comes off).
+
+Built-in trade-offs (verified):
+- **Dribble more / creative freedom** → more take-ons, but a failed take-on is a
+  turnover and success depends on the dribbler vs the defender. Whole-squad probe:
+  good dribblers (18) beat **59** men; poor dribblers (5) beat only **38** and lose
+  ~64% of attempts (giving the ball away). Telling the wrong player to dribble more
+  *hurts* you.
+- **Tackling / get stuck in** → wins more challenges but **fouls 18→24, yellows
+  2.5→3.7** (card/suspension risk).
+- **Get forward** (defenders) → more threat but **GA 1.6→2.0**.
+- **Shoot on sight** → more shots but lower quality / wasted possession.
+- **Offside trap** → a genuine gamble. Against a careless side it kills attacks
+  (vs balanced GA 2.10→1.40, offsides ~4.4); against a **pacey counter** side a
+  well-timed ball beats the stepped-up line for a clean 1-on-1, cancelling the
+  reward (vs Counter GA 1.00→1.03 — no longer a free win). The runner's
+  pace/off-the-ball/anticipation decides whether he wins the run.
+
+So no single slider dominates; the edge comes from **combinations that exploit the
+opponent's setup with players it suits** — which is what the tactics matrix shows
+(counter v gegenpress +2.4, catenaccio v control-possession −0.6) and what squad
+quality amplifies.
+
 ## Diagnostic harnesses
 
 - `tools/instr.mjs [knob] [seeds]` — team-instruction sweep (low vs high).

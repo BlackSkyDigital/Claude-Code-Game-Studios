@@ -2108,7 +2108,29 @@ export class Match {
           claimant.role !== "GK"
         ) {
           const craft = passer.attrs.vision * 0.5 + passer.attrs.passing * 0.5;
-          if (this.rng.chance(craft / 26)) claimant.dribbleTimer = 1.1; // sprung clear
+          // OFFSIDE TRAP — the risk half of the gamble. A high trap kills most
+          // runs (offsides won, handled by the flag), but a ball that BEATS it
+          // leaves the back line caught upfield: the runner is sprung clean
+          // through far more often, scaled by his pace/anticipation/off-the-ball
+          // (does he time and win the run?). High risk to match the high reward.
+          const defTeam = (1 - claimant.team) as 0 | 1;
+          const trap = this.tac(defTeam).offsideTrap;
+          const ra = claimant.attrs;
+          const runner = (ra.pace * 0.4 + ra.offTheBall * 0.4 + ra.anticipation * 0.2) / 20;
+          const springP = craft / 26 + trap * runner * 0.55;
+          if (this.rng.chance(springP)) {
+            claimant.dribbleTimer = trap > 0.35 ? 1.7 : 1.1; // clean through if the trap is beaten
+            if (trap > 0.35) {
+              // the back line stepped up and got caught the wrong side — drop the
+              // nearest covering defender behind the runner so it's a real 1-on-1
+              const cover = this.nearestOutfield(defTeam, claimant.pos);
+              if (cover && cover.role !== "GK") {
+                const back = norm(sub(this.oppGoal(claimant.team), claimant.pos));
+                cover.pos = clampPitch({ x: claimant.pos.x - back.x * 6, y: claimant.pos.y - back.y * 6 });
+                cover.target = { ...cover.pos };
+              }
+            }
+          }
         }
       }
     }
