@@ -5,13 +5,17 @@ import {
   GOAL_Y_MIN,
   PITCH_LENGTH,
   PITCH_WIDTH,
+  type Duty,
+  type PlayerInstructions,
 } from "../engine/types.js";
 import {
   TACTICAL_STYLES,
   styleLabel,
   tacticsForStyle,
   type TacticalStyle,
+  type TeamTactics,
 } from "../engine/tactics.js";
+import { FORMATION_NAMES, FORMATIONS, type Slot } from "../engine/formations.js";
 import { WEATHER_TYPES, weatherLabel, type Weather } from "../engine/conditions.js";
 
 // ---- DOM ----
@@ -54,6 +58,28 @@ const replayToggleBtn = $<HTMLButtonElement>("replayToggle");
 const replayBtn = $<HTMLButtonElement>("replayBtn");
 const stXg = [$("stXg0"), $("stXg1")] as const;
 const ratingsBox = $("ratings");
+// live tactical control
+const homeFormSel = $<HTMLSelectElement>("homeForm");
+const awayFormSel = $<HTMLSelectElement>("awayForm");
+const tiSide = $<HTMLSelectElement>("tiSide");
+const tiPreset = $<HTMLSelectElement>("tiPreset");
+const tiMarkSel = $<HTMLSelectElement>("tiMarkSel");
+const tiSliders = $("tiSliders");
+const tiCustom = $("tiCustom");
+const piPlayer = $<HTMLSelectElement>("piPlayer");
+const piControls = $("piControls");
+const fmEdit = $<HTMLCanvasElement>("fmEdit");
+const fmApply = $<HTMLButtonElement>("fmApply");
+const fmReset = $<HTMLButtonElement>("fmReset");
+
+// the live source of truth for tactics & formations (sliders mutate these and
+// push them into the running Match)
+let liveTactics: [TeamTactics, TeamTactics] = [tacticsForStyle("balanced"), tacticsForStyle("balanced")];
+let liveFormation: [string | Slot[], string | Slot[]] = ["4-3-3", "4-3-3"];
+// per-player instruction state, keyed `${side}:${number}`
+const piState = new Map<string, { duty: Duty; instr: PlayerInstructions }>();
+// formation editor working slots (home-orientation) for the side being edited
+let editorSlots: Slot[] = [];
 
 // ---- pitch transform (metres -> pixels) ----
 const M = 26;
@@ -192,6 +218,18 @@ function fillTeamSelects(): void {
   homeMarkSel.value = tacticsForStyle("balanced").marking;
   awayMarkSel.value = tacticsForStyle("balanced").marking;
 
+  const formOpts = FORMATION_NAMES.map((f) => [f, f] as [string, string]);
+  fillSelect(homeFormSel, formOpts);
+  fillSelect(awayFormSel, formOpts);
+  homeFormSel.value = TEAMS[0]?.formation && FORMATION_NAMES.includes(TEAMS[0].formation) ? TEAMS[0].formation : "4-3-3";
+  awayFormSel.value = TEAMS[1]?.formation && FORMATION_NAMES.includes(TEAMS[1].formation) ? TEAMS[1].formation : "4-3-3";
+  // formation can be changed live (re-shapes the side mid-match)
+  homeFormSel.addEventListener("change", () => applyFormationSelect(0, homeFormSel.value));
+  awayFormSel.addEventListener("change", () => applyFormationSelect(1, awayFormSel.value));
+
+  const presetOpts: [string, string][] = [["", "— preset —"], ...TACTICAL_STYLES.map((s) => [s, styleLabel(s)] as [string, string])];
+  fillSelect(tiPreset, presetOpts);
+
   fillSelect(weatherSel, WEATHER_TYPES.map((w) => [w, weatherLabel(w)] as [string, string]));
   weatherSel.value = "clear";
 }
@@ -200,16 +238,25 @@ function newMatch(): void {
   const h = TEAMS[Number(homeSel.value)]!;
   const a = TEAMS[Number(awaySel.value)]!;
   const seed = Number(seedInput.value) || 1;
-  const homeTactics = tacticsForStyle(homeStyleSel.value as TacticalStyle);
-  const awayTactics = tacticsForStyle(awayStyleSel.value as TacticalStyle);
-  // marking is a chosen team instruction layered on the style preset
-  homeTactics.marking = homeMarkSel.value as "zonal" | "man";
-  awayTactics.marking = awayMarkSel.value as "zonal" | "man";
+  // build the live tactics from the style presets + marking choice
+  liveTactics = [
+    tacticsForStyle(homeStyleSel.value as TacticalStyle),
+    tacticsForStyle(awayStyleSel.value as TacticalStyle),
+  ];
+  liveTactics[0].marking = homeMarkSel.value as "zonal" | "man";
+  liveTactics[1].marking = awayMarkSel.value as "zonal" | "man";
+  liveFormation = [homeFormSel.value, awayFormSel.value];
   match = new Match(h, a, seed, {
-    homeTactics,
-    awayTactics,
+    homeTactics: liveTactics[0],
+    awayTactics: liveTactics[1],
+    homeFormation: liveFormation[0],
+    awayFormation: liveFormation[1],
     weather: weatherSel.value as Weather,
   });
+  seedPlayerInstructions(h, a);
+  refreshTacticsPanel();
+  refreshPlayerPicker();
+  loadEditorFromFormation();
   lastEventCount = 0;
   feed.innerHTML = "";
   commNow.textContent = "Kick-off!";
@@ -741,6 +788,243 @@ replayToggleBtn.addEventListener("click", () => {
 });
 replayBtn.addEventListener("click", () => {
   if (!replayClip) startReplay();
+});
+
+// ============================================================================
+//  LIVE TACTICAL CONTROL — team instructions, player instructions, formations
+// ============================================================================
+
+const pct = (v: number): string => `${Math.round(v * 100)}%`;
+type NumKnob =
+  | "mentality" | "tempo" | "directness" | "pressing" | "lineHeight" | "width"
+  | "tackling" | "shootOnSight" | "creativeFreedom" | "counterPress"
+  | "counterAttack" | "focusPlay" | "offsideTrap";
+const KNOBS: { key: NumKnob; label: string; min: number; max: number; step: number; fmt: (v: number) => string }[] = [
+  { key: "mentality", label: "Mentality", min: -1, max: 1, step: 0.05, fmt: (v) => v <= -0.5 ? "Very Defensive" : v < -0.15 ? "Defensive" : v < 0.15 ? "Balanced" : v < 0.5 ? "Attacking" : "Very Attacking" },
+  { key: "tempo", label: "Tempo", min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: "directness", label: "Passing directness", min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: "pressing", label: "Pressing intensity", min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: "lineHeight", label: "Defensive line", min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: "width", label: "Attacking width", min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: "tackling", label: "Tackling", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.35 ? "Stay on feet" : v < 0.65 ? "Normal" : "Get stuck in" },
+  { key: "shootOnSight", label: "Shoot on sight", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.35 ? "Work into box" : v < 0.65 ? "Mixed" : "Shoot on sight" },
+  { key: "creativeFreedom", label: "Creative freedom", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.35 ? "Disciplined" : v < 0.65 ? "Balanced" : "Expressive" },
+  { key: "counterPress", label: "Counter-press", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.35 ? "Regroup" : v < 0.65 ? "Balanced" : "Win it back" },
+  { key: "counterAttack", label: "Counter-attack", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.35 ? "Hold shape" : v < 0.65 ? "Balanced" : "Break fast" },
+  { key: "focusPlay", label: "Focus play", min: -1, max: 1, step: 0.1, fmt: (v) => v < -0.3 ? "Left flank" : v > 0.3 ? "Right flank" : "Through middle" },
+  { key: "offsideTrap", label: "Offside trap", min: 0, max: 1, step: 0.05, fmt: (v) => v < 0.1 ? "Off" : pct(v) },
+];
+
+function defaultDutyLocal(role: string): Duty {
+  if (role === "GK" || role === "DC") return "defend";
+  if (role === "DL" || role === "DR" || role === "DM" || role === "MC") return "support";
+  return "attack";
+}
+
+/** Does a tactics object match a named preset (so we can show "Preset: X" vs "Custom")? */
+function detectPreset(t: TeamTactics): string {
+  for (const s of TACTICAL_STYLES) {
+    const p = tacticsForStyle(s);
+    const same = KNOBS.every((k) => Math.abs((p[k.key] as number) - (t[k.key] as number)) < 0.001) && p.marking === t.marking;
+    if (same) return styleLabel(s);
+  }
+  return "Custom";
+}
+
+function refreshTacticsPanel(): void {
+  const side = Number(tiSide.value) as 0 | 1;
+  const t = liveTactics[side];
+  tiMarkSel.value = t.marking;
+  tiSliders.innerHTML = "";
+  for (const k of KNOBS) {
+    const wrap = document.createElement("div");
+    wrap.className = "sld";
+    const lab = document.createElement("label");
+    lab.innerHTML = `<span>${k.label}</span><span class="sval">${k.fmt(t[k.key] as number)}</span>`;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = String(k.min); input.max = String(k.max); input.step = String(k.step);
+    input.value = String(t[k.key] as number);
+    const val = lab.querySelector(".sval") as HTMLSpanElement;
+    input.addEventListener("input", () => {
+      const v = Number(input.value);
+      (liveTactics[side][k.key] as number) = v;
+      val.textContent = k.fmt(v);
+      match?.setTactics(side, liveTactics[side]);
+      tiCustom.textContent = `Preset: ${detectPreset(liveTactics[side])}`;
+    });
+    wrap.appendChild(lab); wrap.appendChild(input);
+    tiSliders.appendChild(wrap);
+  }
+  tiCustom.textContent = `Preset: ${detectPreset(t)}`;
+}
+
+tiSide.addEventListener("change", () => { refreshTacticsPanel(); loadEditorFromFormation(); });
+tiMarkSel.addEventListener("change", () => {
+  const side = Number(tiSide.value) as 0 | 1;
+  liveTactics[side].marking = tiMarkSel.value as "zonal" | "man";
+  match?.setTactics(side, liveTactics[side]);
+  tiCustom.textContent = `Preset: ${detectPreset(liveTactics[side])}`;
+});
+tiPreset.addEventListener("change", () => {
+  const style = tiPreset.value as TacticalStyle;
+  if (!style) return;
+  const side = Number(tiSide.value) as 0 | 1;
+  liveTactics[side] = tacticsForStyle(style);
+  match?.setTactics(side, liveTactics[side]);
+  tiPreset.value = "";
+  refreshTacticsPanel();
+});
+
+// ---- player instructions ----
+
+function seedPlayerInstructions(h: typeof TEAMS[number], a: typeof TEAMS[number]): void {
+  piState.clear();
+  ([h, a] as const).forEach((def, side) => {
+    for (const p of def.players) {
+      piState.set(`${side}:${p.number}`, {
+        duty: p.duty ?? defaultDutyLocal(p.role),
+        instr: { ...(p.instructions ?? {}) },
+      });
+    }
+  });
+}
+
+function refreshPlayerPicker(): void {
+  const h = TEAMS[Number(homeSel.value)]!;
+  const a = TEAMS[Number(awaySel.value)]!;
+  const opts: [string, string][] = [];
+  h.players.forEach((p) => opts.push([`0:${p.number}`, `H ${p.number} ${p.name}`]));
+  a.players.forEach((p) => opts.push([`1:${p.number}`, `A ${p.number} ${p.name}`]));
+  fillSelect(piPlayer, opts);
+  refreshPiControls();
+}
+
+function sel(label: string, value: string, options: [string, string][], onChange: (v: string) => void, full = false): HTMLElement {
+  const wrap = document.createElement("div");
+  if (full) wrap.className = "full";
+  const l = document.createElement("label"); l.textContent = label;
+  const s = document.createElement("select");
+  for (const [v, t] of options) { const o = document.createElement("option"); o.value = v; o.textContent = t; s.appendChild(o); }
+  s.value = value;
+  s.addEventListener("change", () => onChange(s.value));
+  wrap.appendChild(l); wrap.appendChild(s);
+  return wrap;
+}
+
+function refreshPiControls(): void {
+  piControls.innerHTML = "";
+  const key = piPlayer.value;
+  if (!key) return;
+  const [sideS, numS] = key.split(":");
+  const side = Number(sideS) as 0 | 1;
+  const num = Number(numS);
+  const st = piState.get(key);
+  if (!st) return;
+  const apply = (patch: PlayerInstructions) => { st.instr = { ...st.instr, ...patch }; match?.setPlayerInstruction(side, num, st.instr); };
+  const tri: [string, string][] = [["", "Auto"], ["more", "More"], ["less", "Less"]];
+  const onoff: [string, string][] = [["", "Off"], ["on", "On"]];
+  // mark target: an opponent's player names
+  const oppDef = TEAMS[Number(side === 0 ? awaySel.value : homeSel.value)]!;
+  const markOpts: [string, string][] = [["", "None"], ...oppDef.players.filter((p) => p.role !== "GK").map((p) => [p.name, p.name] as [string, string])];
+
+  piControls.appendChild(sel("Duty", st.duty, [["defend", "Defend"], ["support", "Support"], ["attack", "Attack"]], (v) => { st.duty = v as Duty; match?.setDuty(side, num, st.duty); }));
+  piControls.appendChild(sel("Shoot", st.instr.shoot ?? "", tri, (v) => apply({ shoot: (v || undefined) as PlayerInstructions["shoot"] })));
+  piControls.appendChild(sel("Dribble", st.instr.dribble ?? "", tri, (v) => apply({ dribble: (v || undefined) as PlayerInstructions["dribble"] })));
+  piControls.appendChild(sel("Cross", st.instr.cross ?? "", tri, (v) => apply({ cross: (v || undefined) as PlayerInstructions["cross"] })));
+  piControls.appendChild(sel("Close down", st.instr.closeDown ?? "", tri, (v) => apply({ closeDown: (v || undefined) as PlayerInstructions["closeDown"] })));
+  piControls.appendChild(sel("Passing", st.instr.passDirectness ?? "", [["", "Auto"], ["shorter", "Shorter"], ["direct", "Direct"]], (v) => apply({ passDirectness: (v || undefined) as PlayerInstructions["passDirectness"] })));
+  piControls.appendChild(sel("Roam", st.instr.roam ? "on" : "", onoff, (v) => apply({ roam: v === "on" })));
+  piControls.appendChild(sel("Get forward", st.instr.getForward ? "on" : "", onoff, (v) => apply({ getForward: v === "on" })));
+  piControls.appendChild(sel("Hold position", st.instr.holdPosition ? "on" : "", onoff, (v) => apply({ holdPosition: v === "on" })));
+  piControls.appendChild(sel("Tackle harder", st.instr.tackleHarder ? "on" : "", onoff, (v) => apply({ tackleHarder: v === "on" })));
+  piControls.appendChild(sel("Tight marking", st.instr.tightMark ? "on" : "", onoff, (v) => apply({ tightMark: v === "on" })));
+  piControls.appendChild(sel("Man-mark", st.instr.mark ?? "", markOpts, (v) => apply({ mark: v || undefined }), true));
+}
+
+piPlayer.addEventListener("change", refreshPiControls);
+
+// ---- formation: live select + custom drag editor ----
+
+function applyFormationSelect(side: 0 | 1, name: string): void {
+  liveFormation[side] = name;
+  match?.setFormation(side, name);
+  if (Number(tiSide.value) === side) loadEditorFromFormation();
+}
+
+function currentFormationSlots(side: 0 | 1): Slot[] {
+  const spec = liveFormation[side];
+  const base = Array.isArray(spec) ? spec : (FORMATIONS[spec] ?? FORMATIONS["4-3-3"]!);
+  return base.map((s) => ({ role: s.role, pos: { x: s.pos.x, y: s.pos.y } }));
+}
+
+function loadEditorFromFormation(): void {
+  editorSlots = currentFormationSlots(Number(tiSide.value) as 0 | 1);
+  drawEditor();
+}
+
+const EW = fmEdit.width, EH = fmEdit.height;
+const ex = (x: number) => (x / PITCH_LENGTH) * EW;
+const ey = (y: number) => (y / PITCH_WIDTH) * EH;
+function drawEditor(): void {
+  const c = fmEdit.getContext("2d")!;
+  c.fillStyle = "#23702f"; c.fillRect(0, 0, EW, EH);
+  c.strokeStyle = "rgba(255,255,255,0.35)"; c.lineWidth = 1;
+  c.strokeRect(2, 2, EW - 4, EH - 4);
+  c.beginPath(); c.moveTo(EW / 2, 2); c.lineTo(EW / 2, EH - 2); c.stroke();
+  for (const s of editorSlots) {
+    c.beginPath(); c.arc(ex(s.pos.x), ey(s.pos.y), 9, 0, Math.PI * 2);
+    c.fillStyle = s.role === "GK" ? "#888" : "#2f8f3f"; c.fill();
+    c.strokeStyle = "rgba(0,0,0,0.5)"; c.stroke();
+    c.fillStyle = "#fff"; c.font = "8px system-ui"; c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillText(s.role, ex(s.pos.x), ey(s.pos.y));
+  }
+}
+
+let dragIdx = -1;
+function editorPoint(e: PointerEvent): { x: number; y: number } {
+  const r = fmEdit.getBoundingClientRect();
+  const mx = ((e.clientX - r.left) / r.width) * EW;
+  const my = ((e.clientY - r.top) / r.height) * EH;
+  return { x: (mx / EW) * PITCH_LENGTH, y: (my / EH) * PITCH_WIDTH };
+}
+fmEdit.addEventListener("pointerdown", (e) => {
+  const pt = editorPoint(e);
+  let best = -1, bd = 1e9;
+  editorSlots.forEach((s, i) => {
+    if (s.role === "GK") return; // keeper stays
+    const d = Math.hypot(s.pos.x - pt.x, s.pos.y - pt.y);
+    if (d < bd) { bd = d; best = i; }
+  });
+  if (best >= 0 && bd < 8) { dragIdx = best; fmEdit.setPointerCapture(e.pointerId); }
+});
+fmEdit.addEventListener("pointermove", (e) => {
+  if (dragIdx < 0) return;
+  const pt = editorPoint(e);
+  editorSlots[dragIdx]!.pos = {
+    x: Math.max(8, Math.min(PITCH_LENGTH - 6, pt.x)),
+    y: Math.max(3, Math.min(PITCH_WIDTH - 3, pt.y)),
+  };
+  drawEditor();
+});
+const endDrag = () => { dragIdx = -1; };
+fmEdit.addEventListener("pointerup", endDrag);
+fmEdit.addEventListener("pointercancel", endDrag);
+
+fmApply.addEventListener("click", () => {
+  const side = Number(tiSide.value) as 0 | 1;
+  liveFormation[side] = editorSlots.map((s) => ({ role: s.role, pos: { ...s.pos } }));
+  match?.setFormation(side, liveFormation[side]);
+  fmApply.textContent = "Applied ✓";
+  setTimeout(() => (fmApply.textContent = "Apply to side"), 1200);
+});
+fmReset.addEventListener("click", () => {
+  const side = Number(tiSide.value) as 0 | 1;
+  const name = (side === 0 ? homeFormSel : awayFormSel).value;
+  liveFormation[side] = name;
+  editorSlots = currentFormationSlots(side);
+  match?.setFormation(side, name);
+  drawEditor();
 });
 
 fillTeamSelects();

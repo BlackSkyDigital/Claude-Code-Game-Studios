@@ -122,6 +122,15 @@
       .ratings .fbar { width: 30px; height: 5px; background: #21262d; border-radius: 3px; overflow: hidden; flex: none; }
       .ratings .fbar > span { display: block; height: 100%; }
       .ratings .rval { font-weight: 700; font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px; }
+      .sliders { display: flex; flex-direction: column; gap: 9px; }
+      .sld { }
+      .sld label { display: flex; justify-content: space-between; margin-bottom: 2px; }
+      .sld label .sval { color: var(--text); font-variant-numeric: tabular-nums; }
+      .sld input[type=range] { width: 100%; }
+      .pictrl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; margin-top: 8px; }
+      .pictrl .full { grid-column: 1 / -1; }
+      .pictrl label { margin-bottom: 2px; }
+      #fmEdit { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; cursor: grab; touch-action: none; }
       #feed { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
       .ev { font-size: 12px; padding: 5px 8px; border-radius: 5px; background: #0d1117;
         border-left: 3px solid var(--line); }
@@ -178,6 +187,16 @@
             </div>
             <div class="row">
               <div>
+                <label for="homeForm">Home formation</label>
+                <select id="homeForm"></select>
+              </div>
+              <div>
+                <label for="awayForm">Away formation</label>
+                <select id="awayForm"></select>
+              </div>
+            </div>
+            <div class="row">
+              <div>
                 <label for="homeMark">Home marking</label>
                 <select id="homeMark"></select>
               </div>
@@ -226,6 +245,50 @@
                 <button id="replayBtn" class="ghost">↺ Replay</button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Team Instructions — Live</h2>
+          <div class="row" style="margin-bottom: 10px;">
+            <div>
+              <label for="tiSide">Editing side</label>
+              <select id="tiSide">
+                <option value="0">Home</option>
+                <option value="1">Away</option>
+              </select>
+            </div>
+            <div>
+              <label for="tiPreset">Load preset</label>
+              <select id="tiPreset"></select>
+            </div>
+          </div>
+          <div id="tiMark" style="margin-bottom: 10px;">
+            <label for="tiMarkSel">Marking</label>
+            <select id="tiMarkSel"><option value="zonal">Zonal</option><option value="man">Man-marking</option></select>
+          </div>
+          <div id="tiSliders" class="sliders"></div>
+          <div id="tiCustom" style="font-size:11px;color:var(--muted);margin-top:6px;">Preset: Balanced</div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Player Instructions — Live</h2>
+          <div>
+            <label for="piPlayer">Player</label>
+            <select id="piPlayer"></select>
+          </div>
+          <div id="piControls" class="pictrl"></div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Formation Editor — Custom</h2>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+            Drag players to design a shape for the editing side, then Apply. (GK fixed.)
+          </div>
+          <canvas id="fmEdit" width="280" height="190" style="background:#23702f;"></canvas>
+          <div class="row" style="margin-top:8px;">
+            <button id="fmApply">Apply to side</button>
+            <button id="fmReset" class="ghost">Reset to preset</button>
           </div>
         </div>
 
