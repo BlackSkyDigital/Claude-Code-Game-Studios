@@ -757,11 +757,14 @@ export class Match {
       // pulled toward the ball, but only gently, so the team doesn't bunch up
       const widthFactor = (0.7 + 0.6 * t.width) * (wideRole ? 1.2 : 1.0);
       const ballYPull = wideRole ? 0.06 : 0.14;
-      // slow, per-player drift so players drift into space individually
-      const drift = Math.sin(this.time * 0.45 + p.id * 1.7) * 3;
-      const tx = p.base.x + (b.pos.x - CENTER.x) * pull + lineShift;
+      // per-player wandering so players drift into space individually rather than
+      // moving as one rigid block — two out-of-phase waves give a less robotic,
+      // more natural check-and-move, in both axes.
+      const driftY = Math.sin(this.time * 0.45 + p.id * 1.7) * 4 + Math.cos(this.time * 0.27 + p.id * 2.3) * 3;
+      const driftX = Math.cos(this.time * 0.33 + p.id * 1.1) * 3;
+      const tx = p.base.x + (b.pos.x - CENTER.x) * pull + lineShift + driftX;
       const ty =
-        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + drift;
+        CENTER.y + (p.base.y - CENTER.y) * widthFactor + (b.pos.y - CENTER.y) * ballYPull + driftY;
       p.target = clampPitch({
         // outfielders stay off both goal lines — never on/behind them (no pile-up)
         x: clamp(tx, 5, PITCH_LENGTH - 5),
@@ -849,9 +852,12 @@ export class Match {
       const goal = this.oppGoal(possTeam);
       const f = norm(sub(goal, b.owner.pos)); // forward, toward goal
       const rt: Vec = { x: f.y, y: -f.x }; // perpendicular (to the side)
+      // two ahead in the half-spaces, one deeper to recycle — but with a little
+      // live movement so support players check in/out rather than standing still
+      const wob = Math.sin(this.time * 0.6) * 3;
       const slots: Vec[] = [
-        { x: b.owner.pos.x + f.x * 16 + rt.x * 11, y: b.owner.pos.y + f.y * 16 + rt.y * 11 },
-        { x: b.owner.pos.x + f.x * 16 - rt.x * 11, y: b.owner.pos.y + f.y * 16 - rt.y * 11 },
+        { x: b.owner.pos.x + f.x * (16 + wob) + rt.x * 11, y: b.owner.pos.y + f.y * (16 + wob) + rt.y * 11 },
+        { x: b.owner.pos.x + f.x * (16 - wob) - rt.x * 11, y: b.owner.pos.y + f.y * (16 - wob) - rt.y * 11 },
         { x: b.owner.pos.x - f.x * 9 + rt.x * 7, y: b.owner.pos.y - f.y * 9 + rt.y * 7 },
       ];
       const taken: Player[] = [b.owner];
@@ -1077,7 +1083,9 @@ export class Match {
     // likely if we just passed up a good shooting chance (prefer to shoot/run).
     const pass = this.choosePass(owner, space);
     if (pass) {
-      let passProb = 0.32 + 0.4 * (1 - Math.min(1, space / 6));
+      // pass mainly when pressured; in space, carry the ball forward instead of
+      // tapping it sideways (cuts the ping-pong, makes build-up progressive)
+      let passProb = 0.25 + 0.42 * (1 - Math.min(1, space / 6));
       if (goodChance) passProb *= 0.4;
       if (this.rng.chance(passProb)) {
         this.executePass(owner, pass.target, pass.type);
@@ -1166,16 +1174,19 @@ export class Match {
       }
 
       // score the option: progress + how open + a bonus for finding a shooter,
-      // minus distance risk. Risky/ambitious types are downweighted when the
-      // passer lacks the skill to pull them off.
+      // minus distance risk. Forward passes are strongly preferred — backward and
+      // square balls are heavily penalised so the side PROGRESSES instead of
+      // endlessly recycling (only going back when there's nothing else on).
       const shooterBonus = tgtGoal < 20 ? (20 - tgtGoal) * 0.5 : 0;
       const skill = oa.passing * 0.5 + oa.technique * 0.3 + oa.vision * 0.2;
       const typeRisk =
         type === "through" ? 8 : type === "lofted" ? 9 : type === "chip" ? 11 : type === "driven" ? 3 : 0;
       const riskPenalty = typeRisk * (1 - skill / 20);
+      const progress =
+        advancement >= 0 ? advancement * (1.0 + 0.6 * D) : advancement * 1.7; // backward hurts
       const score =
-        advancement * (0.7 + 0.7 * D) +
-        openness * (1.2 - 0.7 * D) +
+        progress +
+        openness * (0.8 - 0.45 * D) +
         shooterBonus -
         d * (0.12 - 0.06 * D) -
         riskPenalty;
@@ -1458,7 +1469,7 @@ export class Match {
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
         speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
     }
-    let spread = ((1 - shootAttr / 20) * 5.5 + 2.8 + dGoal * 0.1 + pressure + this.wx.shotScatter) * spreadMul;
+    let spread = ((1 - shootAttr / 20) * 4.8 + 2.2 + dGoal * 0.1 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
     const aimY = CENTER.y + this.rng.gauss(0, spread);

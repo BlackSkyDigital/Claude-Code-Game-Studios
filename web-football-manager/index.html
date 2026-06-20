@@ -212,29 +212,18 @@
               </select>
             </div>
             <div>
-              <label>Speed (within highlights)</label>
-              <div class="speeds">
-                <button class="ghost" data-speed="3">Slow</button>
-                <button class="ghost active" data-speed="6">Normal</button>
-                <button class="ghost" data-speed="16">Fast</button>
-                <button class="ghost" data-speed="90">⏩</button>
-              </div>
+              <label for="spdSlider">In-highlight speed — <span id="spdVal">Normal</span></label>
+              <input id="spdSlider" type="range" min="1" max="18" value="5" />
             </div>
-            <div class="row">
-              <div>
-                <label for="skipSpeed">Skip speed (no action)</label>
-                <select id="skipSpeed">
-                  <option value="24">Slow</option>
-                  <option value="48" selected>Fast</option>
-                  <option value="120">Instant</option>
-                </select>
-              </div>
-              <div>
-                <label>Replays</label>
-                <div class="row">
-                  <button id="replayToggle" class="ghost active">On</button>
-                  <button id="replayBtn" class="ghost">↺ Replay</button>
-                </div>
+            <div>
+              <label for="skipSlider">Between-highlight speed — <span id="skipVal">Fast</span></label>
+              <input id="skipSlider" type="range" min="10" max="120" value="48" />
+            </div>
+            <div>
+              <label>Replays</label>
+              <div class="row">
+                <button id="replayToggle" class="ghost active">On</button>
+                <button id="replayBtn" class="ghost">↺ Replay</button>
               </div>
             </div>
           </div>

@@ -46,7 +46,10 @@ const conditionsLine = $("conditions");
 const commNow = $("commNow");
 const commPrev = $("commPrev");
 const hlSel = $<HTMLSelectElement>("hlMode");
-const skipSel = $<HTMLSelectElement>("skipSpeed");
+const spdSlider = $<HTMLInputElement>("spdSlider");
+const spdVal = $("spdVal");
+const skipSlider = $<HTMLInputElement>("skipSlider");
+const skipVal = $("skipVal");
 const replayToggleBtn = $<HTMLButtonElement>("replayToggle");
 const replayBtn = $<HTMLButtonElement>("replayBtn");
 const stXg = [$("stXg0"), $("stXg1")] as const;
@@ -62,7 +65,7 @@ const Y = (y: number) => M + y * sy;
 // ---- state ----
 let match: Match | null = null;
 let playing = false;
-let timeScale = 6; // SIMULATED seconds per REAL second (frame-rate independent)
+let timeScale = 5; // SIMULATED seconds per REAL second (frame-rate independent)
 let lastFrame = 0;
 let acc = 0; // leftover simulated time not yet stepped
 let alpha = 1; // interpolation fraction between prev and curr snapshot
@@ -713,20 +716,23 @@ playBtn.addEventListener("click", () => {
   playing = !playing;
   playBtn.textContent = playing ? "Pause" : "Play";
 });
-for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-speed]")) {
-  btn.addEventListener("click", () => {
-    timeScale = Number(btn.dataset.speed);
-    for (const b of document.querySelectorAll("[data-speed]"))
-      b.classList.toggle("active", b === btn);
-  });
+// two independent speed sliders, FM-style: how fast highlights PLAY, and how
+// fast the match fast-forwards BETWEEN highlights.
+const spdLabel = (v: number) => (v <= 2 ? "Slow" : v <= 6 ? "Normal" : v <= 11 ? "Fast" : "Very Fast");
+const skipLabel = (v: number) => (v <= 24 ? "Slow" : v <= 70 ? "Fast" : "Instant");
+function applySpeeds(): void {
+  timeScale = Number(spdSlider.value);
+  skipSpeed = Number(skipSlider.value);
+  spdVal.textContent = spdLabel(timeScale);
+  skipVal.textContent = skipLabel(skipSpeed);
 }
+spdSlider.addEventListener("input", applySpeeds);
+skipSlider.addEventListener("input", applySpeeds);
+applySpeeds();
 hlSel.addEventListener("change", () => {
   highlightMode = hlSel.value;
   clipCooldown = 0;
   clipTrigger = false;
-});
-skipSel.addEventListener("change", () => {
-  skipSpeed = Number(skipSel.value);
 });
 replayToggleBtn.addEventListener("click", () => {
   replaysOn = !replaysOn;
