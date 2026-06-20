@@ -65,26 +65,32 @@ shots vs ~40 for an open zonal game.
 - Applied via `tightMark` on individual instructions; the team-level "tighter
   marking" toggle is a natural next addition to `TeamTactics`.
 
-## What's designed but not yet built (roles & duties)
+## Roles & duties layer ✅ (implemented)
 
-The **roles & duties** layer is the remaining piece. Today, role *flavour* is
-expressed through **traits/PPMs** (inverted winger = `cuts_inside`, ball-winning
-runner = `gets_forward`, poacher = `runs_in_behind`, playmaker =
-`tries_killer_balls`, etc.), which already bias movement and decisions. The plan
-for a formal layer:
+### Duty (defend / support / attack)
+- `PlayerDef.duty: "defend" | "support" | "attack"`, defaulting sensibly by
+  position (GK/CB defend, FB/DM/CM support, wide/AM/ST attack) and overridable
+  per player in the data.
+- Wired into `assignMovement`: attack duty raises the ball-relative push
+  (`dutyPush`) and, for **deeper** players, adds a static forward nudge
+  (`dutyAdvance`) so a wing-back overlaps and a box-to-box mid joins the line;
+  defend duty holds station and sits deeper. Forwards are excluded from the
+  static nudge so they don't camp offside.
+- *Demo in data:* Alexander-Arnold & Robertson on **attack** (overlapping
+  wing-backs); Rodri, Mac Allister, Rice, Tchouaméni on **defend** (holding);
+  De Bruyne, Valverde, Bellingham on **attack** (box-to-box / advanced).
 
-- Add `PlayerDef.role` *duty*: `{ duty: "defend" | "support" | "attack" }` plus a
-  named role enum, mapping each to concrete knobs:
-  - duty → how high the player's base position pushes and how readily he joins
-    attacks / tracks back (a Full-Back on Attack overlaps; on Defend he holds).
-  - role → which behaviours switch on (Target Man = hold-up + aerial focus;
-    False Nine = drops between lines; Mezzala = drifts into the half-space).
-- Wire duty into `assignMovement` (base-position push & defensive recovery) and
-  role into the decision weights in `carrierUpdate`/`choosePass`.
-- Surface role + duty per player in the UI tactics screen.
+### Derived role names
+- `roleLabel(role, duty, traits)` names the combination for the UI — Wing-Back,
+  Ball-Playing Defender, Deep-Lying Playmaker, Box-to-Box, Mezzala, Inverted
+  Winger, Poacher, Complete Forward, etc. Shown on hover in the ratings panel
+  (e.g. "Inverted Winger · attack"). The *behaviour* comes from duty + traits;
+  the label just names it.
 
-This sits cleanly on the current trait system — traits become the low-level
-primitives that named roles compose.
+> Traits remain the low-level primitives; named roles are the composition of
+> position + duty + traits. A future step is an explicit named-role picker that
+> sets duty + traits in one click, plus role-specific behaviours (target-man
+> hold-up, false-nine dropping).
 
 ## Marking quick-reference (current build)
 

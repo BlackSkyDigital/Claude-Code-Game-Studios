@@ -501,7 +501,9 @@ function rrow(p: Snapshot["players"][number] | undefined): string {
   const inj = p.injured ? ' <span title="carrying a knock">🩹</span>' : "";
   // a slim fitness bar so individual stamina/injury is visible at a glance
   const bar = `<span class="fbar" title="fitness ${p.fitness}%"><span style="width:${p.fitness}%;background:${fc}"></span></span>`;
-  return `<div class="rrow"><span class="rnum">${p.number}</span><span class="rname">${p.name}${p.goals ? " ⚽" : ""}${inj}</span>${bar}<span class="rval" style="background:${c}22;color:${c}">${p.rating.toFixed(1)}</span></div>`;
+  // role + duty shown on hover (e.g. "Inverted Winger · attack")
+  const tip = `${p.roleName} · ${p.duty}`;
+  return `<div class="rrow" title="${tip}"><span class="rnum">${p.number}</span><span class="rname">${p.name}${p.goals ? " ⚽" : ""}${inj}</span>${bar}<span class="rval" style="background:${c}22;color:${c}">${p.rating.toFixed(1)}</span></div>`;
 }
 function updateRatings(snap: Snapshot): void {
   const home = snap.players

@@ -8,6 +8,7 @@ import {
   type Attrs,
   type MatchEvent,
   type MatchEventType,
+  type Duty,
   type PlayerDef,
   type Role,
   type TeamDef,
@@ -64,6 +65,8 @@ interface Player {
   starter: boolean; // started the match (vs came off the bench)
   markName: string | null; // individual instruction: opponent name or Role to man-mark
   tightMark: boolean; // stick especially tight to the marked man
+  duty: Duty; // defend / support / attack — how far he commits forward
+  roleName: string; // derived tactical role label for the UI (e.g. "Inverted Winger")
   stat: PlayerStat;
 }
 
@@ -138,6 +141,8 @@ export interface Snapshot {
     shots: number;
     fitness: number; // individual condition 0–100
     injured: boolean;
+    roleName: string; // tactical role label (e.g. "Inverted Winger")
+    duty: Duty;
   }[];
   events: MatchEvent[];
 }
@@ -174,6 +179,56 @@ function segDist(p: Vec, a: Vec, b: Vec): number {
   let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / l2;
   t = Math.max(0, Math.min(1, t));
   return dist(p, { x: a.x + t * abx, y: a.y + t * aby });
+}
+
+/** Sensible default duty for a position when none is specified in the data. */
+function defaultDuty(role: Role): Duty {
+  switch (role) {
+    case "GK":
+    case "DC":
+      return "defend";
+    case "DL":
+    case "DR":
+    case "DM":
+    case "MC":
+      return "support";
+    case "ML":
+    case "MR":
+    case "AM":
+    case "ST":
+      return "attack";
+  }
+}
+
+/** Derive a human tactical-role label from position, duty and traits (FM-style
+ * names), for display. The behaviour comes from duty + traits; this just names
+ * the combination. */
+function roleLabel(role: Role, duty: Duty, traits: Set<Trait>): string {
+  switch (role) {
+    case "GK":
+      return "Goalkeeper";
+    case "DC":
+      return traits.has("gets_forward") ? "Ball-Playing Defender" : "Central Defender";
+    case "DL":
+    case "DR":
+      return duty === "attack" || traits.has("gets_forward") ? "Wing-Back" : "Full-Back";
+    case "DM":
+      return traits.has("tries_killer_balls") ? "Deep-Lying Playmaker" : "Defensive Midfielder";
+    case "MC":
+      if (traits.has("tries_killer_balls")) return "Advanced Playmaker";
+      if (traits.has("gets_forward") || duty === "attack") return "Box-to-Box Midfielder";
+      if (traits.has("shoots_from_distance")) return "Mezzala";
+      return "Central Midfielder";
+    case "ML":
+    case "MR":
+      return traits.has("cuts_inside") ? "Inverted Winger" : "Winger";
+    case "AM":
+      return traits.has("tries_killer_balls") ? "Advanced Playmaker" : "Attacking Midfielder";
+    case "ST":
+      if (traits.has("runs_in_behind") && traits.has("places_shots")) return "Complete Forward";
+      if (traits.has("runs_in_behind")) return "Poacher";
+      return "Advanced Forward";
+  }
 }
 
 export class Match {
@@ -286,6 +341,8 @@ export class Match {
         starter,
         markName: pd.instructions?.mark ?? null,
         tightMark: pd.instructions?.tightMark ?? false,
+        duty: pd.duty ?? defaultDuty(pd.role),
+        roleName: roleLabel(pd.role, pd.duty ?? defaultDuty(pd.role), new Set(pd.traits ?? [])),
         stat: { passA: 0, passC: 0, shots: 0, sot: 0, goals: 0, assists: 0, keyPasses: 0, tackles: 0, saves: 0, blocks: 0 },
       };
     };
@@ -687,8 +744,15 @@ export class Match {
       const wideRole =
         p.role === "ML" || p.role === "MR" || p.role === "DL" || p.role === "DR";
       const line = fwd ? 1.25 : def ? 0.8 : 1.05;
-      const pull = (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line;
-      const lineShift = dir * (t.lineHeight - 0.5) * 24;
+      // DUTY: per-player attacking commitment. Attack duty pushes higher and
+      // joins attacks (an overlapping wing-back); defend duty holds station.
+      const dutyPush = p.duty === "attack" ? 1.12 : p.duty === "defend" ? 0.82 : 1.0;
+      // the static forward nudge applies only to DEEPER players joining the
+      // attack (an overlapping wing-back / box-to-box mid). Forwards already
+      // start high; pushing them up further just leaves them camped offside.
+      const dutyAdvance = fwd ? 0 : dir * (p.duty === "attack" ? 5 : p.duty === "defend" ? -3 : 0);
+      const pull = (attacking ? 0.5 + 0.12 * t.mentality : 0.42) * line * dutyPush;
+      const lineShift = dir * (t.lineHeight - 0.5) * 24 + dutyAdvance;
       // wide players hold the touchline to stretch play; everyone else can be
       // pulled toward the ball, but only gently, so the team doesn't bunch up
       const widthFactor = (0.7 + 0.6 * t.width) * (wideRole ? 1.2 : 1.0);
@@ -948,15 +1012,15 @@ export class Match {
       // range, but not so generous that junk shots pile up while dwelling
       const closeness = Math.max(0, 1 - dGoal / 24);
       const angle = 1 - Math.min(1, Math.abs(owner.pos.y - 34) / (dGoal + 7));
-      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.015;
+      let shotProb = (0.2 + shootAttr / 22) * closeness * angle * 0.011;
       if (space < 2.5) shotProb *= 0.5; // crowded out
       shotProb *= 0.85 + 0.3 * t.mentality;
       shotProb *= 0.9 + (owner.attrs.flair / 20) * 0.2; // flair players let fly
       if (fromDistance && dGoal > 16) shotProb *= 1.6; // happy to try from range
       // floors fire only when genuinely UNMARKED (space-gated) so they don't
       // pile up while a striker dwells closely marked in the box
-      if (dGoal < 14 && angle > 0.6 && space > 5) shotProb = Math.max(shotProb, 0.1);
-      if (dGoal < 8 && angle > 0.75 && space > 6) shotProb = Math.max(shotProb, 0.2); // big chance
+      if (dGoal < 14 && angle > 0.6 && space > 6) shotProb = Math.max(shotProb, 0.08);
+      if (dGoal < 8 && angle > 0.75 && space > 7) shotProb = Math.max(shotProb, 0.16); // big chance
       goodChance = closeness * angle > 0.35;
       if (this.rng.chance(shotProb)) {
         this.shoot(owner, this.chooseShotType(owner, dGoal, space));
@@ -970,7 +1034,7 @@ export class Match {
     if (this.inBoxAttacking(owner)) {
       const cb = this.bestCutbackTarget(owner);
       if (cb) {
-        const cbProb = 0.02 + (owner.attrs.vision / 20) * 0.02;
+        const cbProb = 0.015 + (owner.attrs.vision / 20) * 0.015;
         if (this.rng.chance(cbProb)) {
           this.cutback(owner, cb);
           return;
@@ -1616,7 +1680,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.92, (0.275 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
+            Math.min(0.92, (0.25 + saveSkill / 40) * (1 - 0.32 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
@@ -1977,6 +2041,8 @@ export class Match {
         shots: p.stat.shots,
         fitness: Math.round(p.condition * 100),
         injured: p.injured,
+        roleName: p.roleName,
+        duty: p.duty,
       })),
       events: this.events,
     };

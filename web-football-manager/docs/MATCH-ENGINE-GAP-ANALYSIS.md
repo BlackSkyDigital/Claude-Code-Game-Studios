@@ -98,7 +98,9 @@ across 0–18m from goal (concentrated 6–12m) instead of clustering on the lin
 |---|---|---|
 | Team styles (tiki‑taka, gegenpress, counter, route‑one, catenaccio, …) | ✅ | Presets of mentality/tempo/directness/pressing/line height/width |
 | **Player traits / PPMs** | ✅ | shoots_from_distance, places_shots, tries_killer_balls, likes_to_dribble, runs_in_behind, cuts_inside, gets_forward |
-| Per‑player **individual instructions** | 🟡 | Expressed via traits (inverted winger cuts in, gets‑forward runs, killer balls); no formal role/duty layer yet |
+| **Player roles & duties** | ✅ | Per-player duty (defend/support/attack) drives forward commitment; named roles derived (Wing-Back, DLP, Inverted Winger, Poacher…) shown in the UI |
+| **Marking** (zonal / man, individual man-mark) | ✅ | Team instruction + per-player mark a specific player/position |
+| Per‑player **other instructions** (shoot more, sit narrower…) | 🟡 | Traits cover much of it; no full PI menu yet |
 | **In‑match management** (live tactic/mentality changes, shouts) | ❌ | Tactics still fixed at kick‑off (human-facing controls are the next step) |
 | **Substitutions** | ✅ | Auto-subs for injuries, then tired legs late on (like-for-like, up to 5; ~5/match) |
 | Formation changes mid‑match | ❌ | |

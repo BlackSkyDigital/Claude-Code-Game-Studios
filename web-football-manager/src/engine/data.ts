@@ -1,4 +1,4 @@
-import type { PlayerDef, PlayerInstructions, Role, TeamDef, Trait } from "./types.js";
+import type { Duty, PlayerDef, PlayerInstructions, Role, TeamDef, Trait } from "./types.js";
 import { makeAttrs, type Attrs } from "./attributes.js";
 
 /**
@@ -22,8 +22,9 @@ function p(
   ov: Partial<Attrs> = {},
   traits: Trait[] = [],
   instructions?: PlayerInstructions,
+  duty?: Duty,
 ): PlayerDef {
-  return { name, number, role, attrs: makeAttrs(role, overall, ov), traits, instructions };
+  return { name, number, role, attrs: makeAttrs(role, overall, ov), traits, instructions, duty };
 }
 
 export const TEAMS: TeamDef[] = [
@@ -39,8 +40,8 @@ export const TEAMS: TeamDef[] = [
       p("Dias", 3, "DC", 17, { tackling: 17, marking: 17, composure: 16 }),
       p("Stones", 5, "DC", 16, { passing: 16, composure: 16 }),
       p("Gvardiol", 24, "DL", 16, { pace: 16, strength: 16 }, ["gets_forward"]),
-      p("Rodri", 16, "DM", 18, { passing: 18, decisions: 18, composure: 18, tackling: 17 }, [], { mark: "Szoboszlai" }),
-      p("De Bruyne", 17, "MC", 18, { passing: 20, vision: 20, longShots: 18, technique: 18 }, ["tries_killer_balls", "shoots_from_distance"]),
+      p("Rodri", 16, "DM", 18, { passing: 18, decisions: 18, composure: 18, tackling: 17 }, [], { mark: "Szoboszlai" }, "defend"),
+      p("De Bruyne", 17, "MC", 18, { passing: 20, vision: 20, longShots: 18, technique: 18 }, ["tries_killer_balls", "shoots_from_distance"], undefined, "attack"),
       p("Silva", 20, "MC", 17, { technique: 19, vision: 18, dribbling: 17 }, ["tries_killer_balls", "likes_to_dribble"]),
       p("Foden", 47, "MR", 17, { dribbling: 18, technique: 18, finishing: 16 }, ["cuts_inside", "likes_to_dribble"]),
       p("Haaland", 9, "ST", 17, { finishing: 19, strength: 18, pace: 17 }, ["runs_in_behind", "places_shots"]),
@@ -62,11 +63,11 @@ export const TEAMS: TeamDef[] = [
     formation: "4-3-3",
     players: [
       p("Alisson", 1, "GK", 17, { reflexes: 18, oneOnOnes: 17 }),
-      p("Alexander-Arnold", 66, "DR", 16, { passing: 18, crossing: 18, vision: 17 }, ["tries_killer_balls", "gets_forward"]),
+      p("Alexander-Arnold", 66, "DR", 16, { passing: 18, crossing: 18, vision: 17 }, ["tries_killer_balls", "gets_forward"], undefined, "attack"),
       p("Konate", 5, "DC", 15, { pace: 16, strength: 16 }),
       p("Van Dijk", 4, "DC", 18, { tackling: 18, marking: 18, heading: 18, strength: 18, composure: 18 }),
-      p("Robertson", 26, "DL", 16, { stamina: 18, crossing: 17, pace: 16 }, ["gets_forward"]),
-      p("Mac Allister", 10, "DM", 16, { passing: 17, vision: 16, technique: 16 }, ["tries_killer_balls"], { mark: "De Bruyne", tightMark: true }),
+      p("Robertson", 26, "DL", 16, { stamina: 18, crossing: 17, pace: 16 }, ["gets_forward"], undefined, "attack"),
+      p("Mac Allister", 10, "DM", 16, { passing: 17, vision: 16, technique: 16 }, ["tries_killer_balls"], { mark: "De Bruyne", tightMark: true }, "defend"),
       p("Szoboszlai", 8, "MC", 16, { longShots: 17, stamina: 17 }, ["shoots_from_distance"]),
       p("Gravenberch", 38, "MC", 15, { dribbling: 16, strength: 15 }, ["likes_to_dribble"]),
       p("Salah", 11, "MR", 18, { finishing: 18, pace: 17, dribbling: 18, composure: 17 }, ["cuts_inside", "places_shots"]),
@@ -93,7 +94,7 @@ export const TEAMS: TeamDef[] = [
       p("Saliba", 2, "DC", 17, { pace: 17, tackling: 17, composure: 17 }),
       p("Gabriel", 6, "DC", 16, { heading: 17, strength: 17 }),
       p("Calafiori", 33, "DL", 15, { dribbling: 15 }),
-      p("Rice", 41, "DM", 17, { tackling: 17, stamina: 18, passing: 16, strength: 16 }),
+      p("Rice", 41, "DM", 17, { tackling: 17, stamina: 18, passing: 16, strength: 16 }, [], undefined, "defend"),
       p("Odegaard", 8, "MC", 17, { vision: 18, passing: 18, technique: 18 }, ["tries_killer_balls", "shoots_from_distance"]),
       p("Havertz", 29, "MC", 15, { heading: 16, offTheBall: 16 }, ["runs_in_behind"]),
       p("Saka", 7, "MR", 17, { dribbling: 18, crossing: 17, finishing: 16 }, ["cuts_inside", "likes_to_dribble"]),
@@ -120,9 +121,9 @@ export const TEAMS: TeamDef[] = [
       p("Rudiger", 22, "DC", 16, { pace: 16, strength: 17, aggression: 17 }),
       p("Militao", 3, "DC", 16, { pace: 17, jumpingReach: 17 }),
       p("Mendy", 23, "DL", 15, { pace: 16, strength: 16 }),
-      p("Tchouameni", 18, "DM", 16, { tackling: 17, strength: 16, positioning: 16 }),
-      p("Valverde", 15, "MC", 17, { stamina: 19, workRate: 18, longShots: 17, pace: 16 }, ["shoots_from_distance", "gets_forward"]),
-      p("Bellingham", 5, "MC", 18, { offTheBall: 18, technique: 17, finishing: 16, composure: 17 }, ["runs_in_behind"]),
+      p("Tchouameni", 18, "DM", 16, { tackling: 17, strength: 16, positioning: 16 }, [], undefined, "defend"),
+      p("Valverde", 15, "MC", 17, { stamina: 19, workRate: 18, longShots: 17, pace: 16 }, ["shoots_from_distance", "gets_forward"], undefined, "attack"),
+      p("Bellingham", 5, "MC", 18, { offTheBall: 18, technique: 17, finishing: 16, composure: 17 }, ["runs_in_behind"], undefined, "attack"),
       p("Vinicius", 7, "MR", 18, { pace: 19, acceleration: 19, dribbling: 19, flair: 18 }, ["likes_to_dribble", "cuts_inside"]),
       p("Mbappe", 9, "ST", 19, { pace: 20, acceleration: 20, finishing: 18, dribbling: 18 }, ["runs_in_behind", "likes_to_dribble", "places_shots"]),
       p("Rodrygo", 11, "ML", 16, { dribbling: 17, pace: 17 }, ["cuts_inside"]),

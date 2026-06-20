@@ -62,6 +62,13 @@ export interface PlayerInstructions {
   tightMark?: boolean;
 }
 
+/**
+ * Duty — how far a player commits forward vs holds his defensive station, the
+ * core of FM's role/duty system. A Full-Back on Attack overlaps; on Defend he
+ * sits. Support is the balanced default.
+ */
+export type Duty = "defend" | "support" | "attack";
+
 export interface PlayerDef {
   name: string;
   number: number;
@@ -69,6 +76,7 @@ export interface PlayerDef {
   attrs: Attrs;
   traits?: Trait[];
   instructions?: PlayerInstructions;
+  duty?: Duty;
 }
 
 export interface TeamDef {
