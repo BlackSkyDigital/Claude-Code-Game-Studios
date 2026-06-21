@@ -3,13 +3,14 @@
 // tuning where goals come from (the golden-boot / midfield-scoring problem).
 //
 // Real PL goal split (rough): ST ~33%, wide ~27%, midfield ~22%, defenders ~14%
-// (incl. set pieces), own/other ~4%.
+// (incl. set pieces), own/other ~4%. NB "wide" = wingers (MR/ML) only; the
+// central attacking midfielder (AM) is a MIDFIELD scorer, not a wide one.
 import { Match } from "../dist/engine/match.js";
 import { TEAMS } from "../dist/engine/data.js";
 import { tacticsForStyle } from "../dist/engine/tactics.js";
 
 const N = Number(process.argv[2]) || 40;
-const band = (r) => (r === "GK" ? "gk" : r === "ST" ? "st" : r === "MR" || r === "ML" || r === "AM" ? "wide" : r === "MC" || r === "DM" ? "mid" : "def");
+const band = (r) => (r === "GK" ? "gk" : r === "ST" ? "st" : r === "MR" || r === "ML" ? "wide" : r === "MC" || r === "DM" || r === "AM" ? "mid" : "def");
 const shots = { st: 0, wide: 0, mid: 0, def: 0, gk: 0 };
 const goals = { st: 0, wide: 0, mid: 0, def: 0, gk: 0 };
 let g = 0;

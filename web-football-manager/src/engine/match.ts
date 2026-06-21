@@ -1747,7 +1747,8 @@ export class Match {
     const attackers = this.players
       .filter((p) => p.team === attackTeam && p !== taker && p.role !== "GK")
       .sort((a, c) => c.attrs.heading + c.attrs.jumpingReach - (a.attrs.heading + a.attrs.jumpingReach));
-    attackers.slice(0, 4).forEach((p, i) => {
+    const inBox = attackers.slice(0, 4);
+    inBox.forEach((p, i) => {
       p.pos = clampPitch({ x: boxX, y: 28 + i * 4 });
       p.target = { ...p.pos };
     });
@@ -1763,25 +1764,33 @@ export class Match {
     this.ball.owner = taker;
     this.ball.pos = { ...taker.pos };
     this.emit("corner", attackTeam, taker.name, this.vary([`Corner to ${this.shortName(attackTeam)}.`, `${taker.name} stands over the corner...`, `Corner kick, ${this.shortName(attackTeam)}...`]));
-    // SET-PIECE HEADER: the strongest aerial threat (often a centre-back up for
-    // the corner, or a target man) attacks the delivery. Whether he connects with
-    // a clean header depends on the delivery quality and his aerial duel with the
-    // marker — so a real share of goals comes off set pieces, scored by defenders
-    // and target men rather than only the front line. ~real ~3% of corners score.
-    const header = attackers[0]!;
+    // SET-PIECE HEADER: the box threat who attacks the delivery. CENTRE-BACKS who
+    // come up for corners are a prime, realistic source of set-piece goals — so the
+    // finisher is the best aerial threat in the box WITH a genuine edge for
+    // defenders, rather than always the front line. (Defenders score ~14% of real
+    // goals, mostly from set plays; this routes those finishes to them.)
+    const aerialOf = (p: Player) =>
+      p.attrs.heading * 0.6 + p.attrs.jumpingReach * 0.3 + p.attrs.aggression * 0.1 +
+      (p.role === "DC" ? 3.5 : (p.role === "DL" || p.role === "DR") ? 1.8 : 0);
+    const header = [...inBox].sort((a, c) => aerialOf(c) - aerialOf(a))[0]!;
     const aerial = (header.attrs.heading * 0.6 + header.attrs.jumpingReach * 0.3 + header.attrs.aggression * 0.1) * this.sharp(header);
     const marker = this.nearestOutfield((1 - attackTeam) as 0 | 1, header.pos);
     const block = marker ? marker.attrs.heading * 0.5 + marker.attrs.marking * 0.3 + marker.attrs.jumpingReach * 0.2 : 7;
     const delivery = 0.65 + taker.attrs.crossing / 45;
-    const connect = clamp(0.04, 0.26, 0.10 * delivery * (aerial / (aerial + block)) * 2);
+    // connect ~18% for a good delivery vs an even aerial duel → with the header's
+    // own finishing this lands at the real ~2.5-3% of corners scored, almost all
+    // by the CB/target-man who attacks it (lifts the defender goal share toward
+    // the real ~14%). Scales with delivery quality and the aerial mismatch.
+    const connect = clamp(0.05, 0.42, 0.18 * delivery * (aerial / (aerial + block)) * 2);
     if (this.rng.chance(connect)) {
       // win the flight and meet it around the penalty spot for a header on goal
       header.pos = clampPitch({ x: attackTeam === 0 ? PITCH_LENGTH - 9 : 9, y: 34 + this.rng.range(-3.5, 3.5) });
       this.ball.owner = header;
       this.ball.pos = { ...header.pos };
-      this.shoot(header, "header");
+      this.shoot(header, "header", "setpiece");
     } else {
-      const target = this.bestBoxTarget(taker) ?? attackers[0]!;
+      // not a clean first contact — swung into the box for the aerial contest
+      const target = this.bestBoxTarget(taker) ?? inBox[0]!;
       this.cross(taker, target);
     }
   }
