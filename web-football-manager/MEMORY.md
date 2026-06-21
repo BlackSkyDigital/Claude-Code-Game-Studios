@@ -141,49 +141,56 @@ the end (~1–2 min); don't pile up multiple in the background. **Never**
   scaled by Off The Ball + mentality + getForward (no flat gate/cap). A cut-back
   is now finished by the **arriving runner it was aimed at** (usually a mid),
   not whoever's nearest — so midfield runs become midfield goals. Lifted **review
-  g/g 2.43 → 2.72** and **season g/g 2.43 → 2.62** with no dash inflation; goal
-  sources & shot outcomes textbook (goal 10 / saved 25 / blocked 24 / off 40).
+  g/g 2.43 → 2.72** with no dash inflation; goal sources & shot outcomes textbook.
+- **NEW — defenders score from set pieces (corners):** the "midfield problem"
+  was largely a **diagnostic bug** (roles.mjs counted the central AM as "wide");
+  with correct banding midfield is already ~20-22%. The real gap was DEFENDERS
+  (~4% vs real ~14%). Corners now finish realistically: the header is the best
+  aerial threat in the box **with a centre-back edge** (CBs come up and score),
+  connect lifted to the real ~2.5-3%/corner, and corner headers tagged
+  "setpiece" (were mis-tagged "open"). **def goal share 4% → ~10%**, set-piece
+  goals 1% → ~12%, header share → 18% — review g/g held at 2.73.
 
-### Calibration snapshot (as of commit `~midfield runs`)
+### Calibration snapshot (current)
 | Check | Now | Target |
 |---|---|---|
-| Dash (MCI v LIV) g/g | ~3.1 | 2.5–3.1 ✅ |
-| Review (mixed) g/g | **2.72** ✅ | ~2.7 |
-| Season g/g | **2.62** (↑ from 2.43) | ~2.7 ✅-ish |
-| Champion points | **77** (↑ from 74) | ~84–90 ⚠️ still low |
-| Golden boot | **33** (↓ from 35) | ~25–29 ⚠️ still high |
-| Goal split by role | st 39 / **wide 50** / **mid 7** / def 4 | st 33 / wide 27 / mid 22 / def 14 |
-| Home/Draw/Away | **51 / 18 / 31** | ~44 / 24 / 31 ⚠️ draws low |
+| Dash (MCI v LIV) g/g | ~3.2 | 2.5–3.1 (elite runs a touch hot) |
+| Review (mixed) g/g | **2.73** ✅ | ~2.7 |
+| Season g/g | **2.74** ✅ (↑ 2.43) | ~2.7 |
+| Champion points | **77** (↑ 74) | ~84–90 ⚠️ still low |
+| Golden boot | **34** | ~25–29 ⚠️ still high |
+| Home/Draw/Away | **47 / 23 / 31** ✅ (was 51/18/31) | ~44 / 24 / 31 |
+| Goal split by role (N=100) | **st 37 / wide 33 / mid 20 / def 10** ✅ | st 33 / wide 27 / mid 22 / def 14 |
+| Set-piece goal share | **~12%** ✅ | realistic |
+| Shot outcomes | goal 10 / saved 24 / blocked 24 / off 41 ✅ | 10 / 25 / 28 / 37 |
 | Over-the-bar | ~9% of off-target ✅ | realistic |
 
-Persistent harmless flags: `shots/match` (~33–35) and `ball in-flight %` (~36)
-read slightly HIGH — **pre-existing**, not from physics. Note season results are
-ONE season per seed (high variance — e.g. TOT champion, MCI 9th this run); use
-`tools/seasons.mjs` to average several before trusting any single placing.
+Persistent harmless flags: dash `shots/match` (~35) and `ball in-flight %` (~36)
+read slightly HIGH — **pre-existing**; dash is elite-vs-elite so g/g runs ~0.3
+hotter than the league. Season results are ONE season per seed (high variance);
+use `tools/seasons.mjs` to average several before trusting any single placing.
 
 ---
 
 ## 6. Known issues / open problems (in priority order)
 
-1. **THE big one — WIDE forwards score ~50% of goals (real ~27%); midfield only
-   ~7% (real ~22%).** Partly improved (mid was ~4%, league g/g now realistic) by
-   the midfield-runs + cut-back changes, but wingers still take ~52% of shots:
-   the spatial model routes the final third to wide forwards who cut inside and
-   **shoot themselves**. Next levers to try (carefully, preserving g/g 2.7):
-   (a) when a wide/inverted player is in a shooting spot AND a central runner is
-   better placed, prefer to feed him (cut-back/pass) over shooting; (b) make
-   central mids occupy the advanced half-space "shooting" support slots so they
-   receive there, pushing wingers wider to cross; (c) raise through-ball usage
-   (through-ball goals still ~1% vs real ~8%). **Do positional/movement work, not
-   probability tweaks** — 8+ earlier probability tweaks failed/destabilised.
-2. **Secondary from #1:** champion points still ~77 (real ~85+) and draws dipped
-   to ~18% (home wins ~51%) when scoring rose — once goals spread to midfield and
-   the wide over-shooting is reined in, the strong teams should pull away more and
-   the result split should re-balance. Consider a small home-edge / finishing trim
-   if draws stay low after the role split is fixed.
+1. **Role split — mostly RESOLVED.** Now st 37 / wide 33 / mid 20 / def 10
+   (real 33/27/22/14). st & wide remain ~5pp high and def ~4pp low. To close the
+   last bit (low risk): nudge corner/set-piece defender scoring a touch more
+   (def → ~13%) and/or trim winger self-shooting slightly so st/wide ease toward
+   33/27. **Do positional/movement work, not probability tweaks** — earlier
+   probability tweaks destabilised.
+2. **Champion points ~77 (real ~85+); draws ~18% (real ~24%), home wins ~51%.**
+   When scoring rose the strong teams didn't pull away enough and draws dipped.
+   Likely needs the strong sides to convert their edge into more wins — revisit
+   after confirming the latest season numbers; consider a small home-edge or
+   finishing-spread tweak if draws stay low. (Refresh from the pending season run.)
+3. **Through-ball goals still ~1% (real ~8%)** — central penetration via defence-
+   splitting passes is under-used; a candidate for the next movement/routing pass.
 4. **Cut-back over-counted** — many close-range first-time finishes tagged
    "cut-back", inflating that category.
-5. Dash on-target ~39% slightly above the 30–38 band.
+5. Dash on-target ~40% and g/g ~3.2 run a touch hot (elite-vs-elite); league is
+   fine (review g/g 2.73).
 
 ---
 
