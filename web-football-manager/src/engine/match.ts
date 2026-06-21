@@ -1199,21 +1199,38 @@ export class Match {
         const hi = adir > 0 ? 100 : 55;
         // on a counter-attack break the runners go earlier and more often
         const brk = this.sinceWon(possTeam) < 3 ? Math.max(0, this.tac(possTeam).counterAttack - 0.5) : 0;
+        const mentality = this.tac(possTeam).mentality;
         for (const p of this.players) {
           if (p.team !== possTeam || p === b.owner) continue;
           const fwd = p.role === "ST" || p.role === "AM" || p.role === "MR" || p.role === "ML";
-          // a forward-running midfielder may join late ("gets forward" / PI), but
-          // most midfielders stay to support so the shape doesn't collapse
-          const lateRunner = (p.role === "MC" && p.traits.has("gets_forward")) || p.instr.getForward === true;
-          if (!fwd && !lateRunner) continue;
-          const eager = p.traits.has("runs_in_behind") || p.instr.getForward === true;
-          if (!fwd && !eager && p.attrs.offTheBall < 15) continue;
-          // make the run in bursts, not constantly — timing scales with movement
+          const central = p.role === "MC" || p.role === "DM";
+          if (!fwd && !central) continue; // full-backs/CBs hold shape (bar set pieces)
+          const wantsForward =
+            p.instr.getForward === true || p.traits.has("gets_forward") || p.traits.has("runs_in_behind");
+          // Willingness to break the line this slice. Forwards always go; CENTRAL
+          // midfielders make TIMED LATE RUNS scaled by Off The Ball, team mentality
+          // and any getForward instruction — better movement → more, deeper runs
+          // (no flat gate or cap, it scales smoothly up and down with the player).
+          // DMs hold far more than MCs so the shape doesn't collapse. This is what
+          // makes midfield a genuine scoring source instead of pure support.
+          let drive: number;
+          if (fwd) {
+            drive = 1;
+          } else {
+            const movement = p.attrs.offTheBall / 20;
+            const roleBase = p.role === "DM" ? 0.28 : 0.6;
+            drive = roleBase * (0.35 + 0.65 * movement) * (0.8 + 0.5 * mentality) * (wantsForward ? 1.5 : 1);
+          }
+          // burst timing, staggered per player so the line never empties at once;
+          // a higher drive lowers the threshold → the run comes more often & sooner
           const phase = Math.sin(this.time * 0.6 + p.id * 2.3);
-          if (phase < (eager ? 0.45 : 0.65) - brk * 0.35) continue;
-          // forward-running mids arrive at the TOP of the box (cut-back zone),
-          // staying behind the last line; forwards run beyond it
-          const depth = lateRunner ? -4 : 1 + p.attrs.offTheBall * 0.07;
+          if (phase < 0.92 - drive * 0.75 - brk * 0.35) continue;
+          // how far beyond/behind the last line they arrive: forwards run IN BEHIND;
+          // central runners arrive LATE into the box / cut-back zone, deeper the
+          // better their movement (Off The Ball), so they become real finishers.
+          const depth = fwd
+            ? 1 + p.attrs.offTheBall * 0.07
+            : (p.role === "DM" ? -7 : -3) + p.attrs.offTheBall * 0.16;
           const targetX = clamp(lineX + adir * depth, lo, hi);
           // wide players hold a wider line (back-post threat); others come central
           const pullCentral = p.role === "MR" || p.role === "ML" ? 0.55 : 0.82;
@@ -2274,17 +2291,25 @@ export class Match {
     }
 
     // (1a-ii) A cut-back has reached a team-mate at the top of the box: he hits
-    // it first time (a prime midfield/winger chance).
+    // it first time (a prime midfield/winger chance). The cut-back is AIMED at the
+    // arriving runner (usually a late midfielder), so let HIM finish it rather than
+    // whoever is merely nearest — otherwise the central striker hoovers up every
+    // cut-back and midfield never scores. Falls back to the claimant if the
+    // intended runner isn't actually there to meet it.
     if (b.cutback) {
       b.cutback = false;
-      const goal = this.oppGoal(claimant.team);
-      if (!fromOpponent && claimant.role !== "GK" && dist(claimant.pos, goal) < 23) {
-        if (b.passer && b.passer.team === claimant.team && b.passer !== claimant) {
+      const runner =
+        b.receiver && b.receiver.team === claimant.team && b.receiver.role !== "GK" && dist(b.receiver.pos, b.pos) < 6
+          ? b.receiver
+          : claimant;
+      const goal = this.oppGoal(runner.team);
+      if (!fromOpponent && runner.role !== "GK" && dist(runner.pos, goal) < 23) {
+        if (b.passer && b.passer.team === runner.team && b.passer !== runner) {
           b.passer.stat.passC++;
           b.passer.stat.keyPasses++;
-          claimant.assistFrom = b.passer; // credit the cut-back as an assist
+          runner.assistFrom = b.passer; // credit the cut-back as an assist
         }
-        this.shoot(claimant, this.chooseShotType(claimant, dist(claimant.pos, goal), 5), "cutback");
+        this.shoot(runner, this.chooseShotType(runner, dist(runner.pos, goal), 5), "cutback");
         return;
       }
       // otherwise a defender cuts it out — falls through to normal control
