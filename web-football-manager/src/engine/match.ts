@@ -2299,7 +2299,11 @@ export class Match {
         const def = this.nearestOutfield((1 - claimant.team) as 0 | 1, claimant.pos);
         const ca = claimant.attrs;
         const att = ca.heading * 0.55 + ca.jumpingReach * 0.3 + ca.bravery * 0.15;
-        let winProb = 0.8;
+        // even UNMARKED, connecting cleanly with a cross scales with aerial
+        // ability — a great header attacks it, a poor one mistimes the leap or
+        // glances it wide (no flat 80%). Centred so a typical box forward still
+        // wins ~0.8, scaling smoothly up and down with quality, no hard cap.
+        let winProb = att / (att + 3.2);
         if (def && dist(def.pos, claimant.pos) < 4) {
           const da = def.attrs;
           const dAer = da.heading * 0.45 + da.jumpingReach * 0.3 + da.marking * 0.25;
