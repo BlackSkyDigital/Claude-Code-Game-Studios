@@ -517,6 +517,24 @@ export class Match {
    * fouled side. May also bring a card. */
   private commitFoul(fouler: Player, victim: Player): void {
     this.foulCount++;
+    // ADVANTAGE: if the fouled player can play on into space in a promising area,
+    // the referee waves play on rather than stopping it. It's still a foul on the
+    // record (and may still bring a late card), but the move continues.
+    const advHalf = victim.team === 0 ? victim.pos.x > 52 : victim.pos.x < 53;
+    if (!this.inBoxAttacking(victim) && advHalf && this.spaceAhead(victim) > 6 && this.rng.chance(0.3)) {
+      this.maybeCard(fouler, victim, false);
+      this.ball.owner = victim;
+      this.ball.isShot = false;
+      this.ball.shooter = null;
+      this.ball.passer = null;
+      this.ball.receiver = null;
+      this.ball.deflected = false;
+      this.ball.chance = "open";
+      this.ball.lastTeam = victim.team;
+      this.notePossession(victim.team);
+      if (this.crng.chance(0.4)) this.emit("foul", fouler.team, fouler.name, this.vary([`Advantage played — ${this.shortName(victim.team)} play on!`, `The ref waves it on — advantage ${this.shortName(victim.team)}.`]));
+      return;
+    }
     // a foul in the box is a penalty most (not all) of the time — some are
     // adjudged just outside the area or the attacker shields it out
     const pen = this.inBoxAttacking(victim) && this.rng.chance(0.12);
@@ -630,11 +648,11 @@ export class Match {
     } else {
       this.shotsOnTarget[team]++;
       taker.stat.sot++;
-      if (gk) {
-        gk.stat.saves++;
-        this.claim(gk);
-      }
+      if (gk) gk.stat.saves++;
       this.emit("save", gk ? gk.team : undefined, gk ? gk.name : undefined, this.vary([`SAVED from the spot! Huge moment!`, `The keeper guesses right — penalty saved!`]));
+      // a saved penalty is often parried out — a loose rebound to follow up
+      if (this.rng.chance(0.35)) this.looseInBox(team);
+      else if (gk) this.claim(gk);
     }
   }
 
@@ -2017,6 +2035,33 @@ export class Match {
     this.notePossession(p.team);
   }
 
+  /** Spill the ball loose just in front of goal — a rebound off the keeper or the
+   * woodwork that the nearest player (attacker following up, or a defender
+   * scrambling clear) reacts to next tick. */
+  private looseInBox(attackTeam: 0 | 1): void {
+    const b = this.ball;
+    const goalX = attackTeam === 0 ? PITCH_LENGTH : 0;
+    const dir = attackTeam === 0 ? -1 : 1; // back out from the goal line
+    b.owner = null;
+    b.shooter = null;
+    b.isShot = false;
+    b.judged = true;
+    b.shotType = null;
+    b.passType = null;
+    b.fromCross = false;
+    b.cutback = false;
+    b.deflected = false;
+    b.airTimer = 0;
+    b.offsideFlag = null;
+    b.chance = "rebound";
+    b.pos = clampPitch({ x: goalX + dir * (6 + this.rng.range(0, 6)), y: clamp(34 + this.rng.gauss(0, 6), 8, 60) });
+    const sp = 3 + this.rng.range(0, 4);
+    const ang = this.rng.range(0, Math.PI * 2);
+    b.vel = { x: Math.cos(ang) * sp, y: Math.sin(ang) * sp };
+    b.lastTeam = attackTeam;
+    b.cooldown = 0.1;
+  }
+
   private resolveLooseBall(): void {
     const b = this.ball;
     if (b.cooldown > 0) return;
@@ -2045,7 +2090,7 @@ export class Match {
           const saveSkill = ga.reflexes * 0.5 + ga.handling * 0.3 + ga.oneOnOnes * 0.2;
           let saveProb = Math.max(
             0.15,
-            Math.min(0.94, (0.45 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
+            Math.min(0.94, (0.42 + saveSkill / 40) * (1 - 0.3 * corner) * this.sharp(gk)),
           );
           // a chip beats a keeper caught off his line; if he's home it's easy
           if (b.shotType === "chip") {
@@ -2059,11 +2104,29 @@ export class Match {
             gk.stat.saves++;
             this.shotOutcomes.saved++;
             this.emit("save", gk.team, gk.name, this.vary([`...and ${gk.name} saves!`, `Great stop by ${gk.name}!`, `${gk.name} keeps it out!`, `Saved by ${gk.name}!`]));
-            // a hard shot is often parried behind for a corner rather than held
-            if (this.rng.chance(0.55)) this.concedeCorner(shooter.team);
+            // the keeper parries behind for a corner, holds it, or can only push
+            // it back into a dangerous area — a loose rebound to follow up.
+            const r = this.rng.next();
+            if (r < 0.5) this.concedeCorner(shooter.team);
+            else if (r < 0.66) this.looseInBox(shooter.team);
             else this.claim(gk);
+            return;
           }
-          // if beaten: leave it — the goal is recorded (and counted) at the line
+          // not saved → goal-bound, but it may crash off the WOODWORK
+          if (this.rng.chance(0.04)) {
+            this.shotOutcomes.woodwork++;
+            this.emit("shot_off", shooter.team, shooter.name, this.vary([`...off the post!`, `...off the crossbar!`, `It rattles the woodwork!`, `Off the upright!`]));
+            if (this.rng.chance(0.5)) {
+              this.looseInBox(shooter.team); // rebounds back into play
+            } else if (this.rng.chance(0.45)) {
+              this.concedeCorner(shooter.team); // deflects behind
+            } else {
+              b.isShot = false; b.shooter = null;
+              this.deadBall(false, shooter.team, gk.team); // bounces clear → goal kick
+            }
+            return;
+          }
+          // else: beaten — the goal is recorded (and counted) at the line
           return;
         }
       }
