@@ -56,6 +56,8 @@ export interface MatchContext {
 }
 
 const DT = 0.1; // simulation seconds per step
+const GRAVITY = 9.8; // m/s² — the physics layer's one constant for vertical motion
+const CROSSBAR = 2.44; // height of the goal frame (m) — shots above this go over
 const HALF_SECONDS = 45 * 60;
 const FULL_SECONDS = 90 * 60;
 const CENTER: Vec = { x: PITCH_LENGTH / 2, y: PITCH_WIDTH / 2 };
@@ -121,7 +123,10 @@ interface Ball {
   fromCross: boolean; // ball delivered as a cross — an attacker in the box finishes first-time
   cutback: boolean; // low pull-back to the top of the box — receiver shoots first-time
   airTimer: number; // seconds the ball is airborne (lofted/chip pass beats the ground press)
+  z: number; // real ball height above the turf (m) — physics layer
+  vz: number; // vertical velocity (m/s) — gravity acts on this
   aimY: number; // projected crossing point of the current shot (for on-target)
+  aimZ: number; // projected height at the goal line (for over-the-bar)
   judged: boolean; // whether the current shot has already been adjudicated
   cooldown: number; // seconds during which the ball cannot be controlled
   offsideFlag: 0 | 1 | null; // team flagged offside on the in-flight pass, if any
@@ -292,7 +297,7 @@ export class Match {
   /** review diagnostics: how goals are created, and shot outcomes. */
   goalsByChance: Record<ChanceType, number> = { open: 0, through: 0, cross: 0, cutback: 0, solo: 0, setpiece: 0, penalty: 0, rebound: 0, deflected: 0, owngoal: 0 };
   goalsByShot: Record<ShotType, number> = { placed: 0, power: 0, chip: 0, header: 0 };
-  shotOutcomes = { goal: 0, saved: 0, blocked: 0, offtarget: 0, woodwork: 0 };
+  shotOutcomes = { goal: 0, saved: 0, blocked: 0, offtarget: 0, over: 0, woodwork: 0 };
   handballs = 0; freeKicks = 0; deflections = 0; ownGoals = 0;
   private bench: [Player[], Player[]] = [[], []];
   private subsUsed: [number, number] = [0, 0];
@@ -363,7 +368,10 @@ export class Match {
       fromCross: false,
       cutback: false,
       airTimer: 0,
+      z: 0,
+      vz: 0,
       aimY: 34,
+      aimZ: 0,
       judged: false,
       cooldown: 0,
       offsideFlag: null,
@@ -1696,6 +1704,9 @@ export class Match {
     b.passType = "lofted";
     b.fromCross = true;
     b.airTimer = Math.min(1.3, d / 22);
+    // real parabolic arc: launch upward so the ball lands (z→0) as airTimer ends
+    b.z = 0;
+    b.vz = (GRAVITY * b.airTimer) / 2;
     b.lastTeam = crosser.team;
     b.cooldown = 0.2;
     b.vel = { x: dir.x * speed, y: dir.y * speed };
@@ -1840,6 +1851,9 @@ export class Match {
     b.passType = type;
     b.fromCross = false;
     b.airTimer = air;
+    // lofted/chip passes get a real arc (air>0); ground passes stay at z=0
+    b.z = 0;
+    b.vz = (GRAVITY * air) / 2;
     b.lastTeam = passer.team;
     b.cooldown = 0.2;
     b.vel = { x: dir.x * speed, y: dir.y * speed };
@@ -1884,10 +1898,32 @@ export class Match {
         shootAttr = dGoal < 14 ? a.finishing : a.finishing * 0.5 + a.longShots * 0.5;
         speed = 21 + a.finishing * 0.3; spreadMul = 1.05; break;
     }
-    let spread = ((1 - shootAttr / 20) * 6.8 + 3.5 + dGoal * 0.18 + pressure + this.wx.shotScatter) * spreadMul;
+    let spread = ((1 - shootAttr / 20) * 6.2 + 3.2 + dGoal * 0.18 + pressure + this.wx.shotScatter) * spreadMul;
     spread *= 1.2 - a.composure / 50; // composed finishers place it
     spread *= 1 + (1 - shooter.condition) * 0.3; // tired legs scuff it
+    // A player's inaccuracy lives in 2D: it scatters the aim sideways AND in
+    // height — so a shot can now sail OVER THE BAR, emergent from the same
+    // accuracy model rather than a special case. SHOOTER QUALITY drives it with NO
+    // hard caps: the same `spread` (better finishing/composure/long-shots →
+    // smaller) sets how wide AND how high a player misses, scaling smoothly up and
+    // down with the attributes — the only "cap" is the 1–20 rating range and the
+    // laws of probability, never an artificial clamp.
+    //
+    // The horizontal aim is UNCHANGED from the long-calibrated model, so the
+    // wide-miss rate, shot-side spread, saves and goals are all preserved. The
+    // height is an INDEPENDENT scatter scaled by the SAME `spread`: a poor shooter
+    // sprays it high as readily as wide, a clinical one keeps it down. Kept modest
+    // (~7% of shots clear the bar on average) so it costs almost no goals — only a
+    // shot that was BOTH on target and skied is "lost", a small slice — while
+    // scaling smoothly from ~2% (elite) to ~17% (poor) with no ceiling: the only
+    // cap is the 1–20 rating range, never an artificial clamp.
     const aimY = CENTER.y + this.rng.gauss(0, spread);
+    let aimZBase = 0.5; // intended height: most shots are kept low...
+    if (type === "power") aimZBase = 0.9; // ...power/long efforts are leant back
+    else if (type === "chip") aimZBase = 1.7; // ...chips floated under the bar
+    else if (type === "header") aimZBase = 0.7; // ...headers nodded down
+    const skier = spread * (type === "chip" ? 0.08 : 0.13); // vertical scatter
+    const aimZ = Math.max(0, aimZBase + this.rng.gauss(0, skier));
     const dir = norm(sub({ x: goal.x, y: aimY }, shooter.pos));
 
     // expected goals for this attempt: closer + more central = higher; headers
@@ -1909,6 +1945,15 @@ export class Match {
     this.ball.fromCross = false;
     this.ball.airTimer = 0;
     this.ball.aimY = aimY;
+    this.ball.aimZ = aimZ;
+    // launch the ball on a vertical arc that reaches aimZ as it crosses the line.
+    // flight time ≈ horizontal distance / speed; vz0 = aimZ/t + ½·g·t lifts it so
+    // gravity brings it down to aimZ at the goal (over-the-bar reads true on screen).
+    {
+      const flight = Math.max(0.15, dGoal / Math.max(1, speed));
+      this.ball.z = 0;
+      this.ball.vz = aimZ / flight + 0.5 * GRAVITY * flight;
+    }
     this.ball.judged = false;
     this.ball.lastTeam = shooter.team;
     this.ball.cooldown = 0;
@@ -2053,13 +2098,29 @@ export class Match {
 
     const b = this.ball;
     if (b.owner) {
-      // ball glued just ahead of the carrier, toward goal
+      // ball glued just ahead of the carrier, toward goal (at his feet)
       const dir = norm(sub(this.oppGoal(b.owner.team), b.owner.pos));
       b.pos = { x: b.owner.pos.x + dir.x * 0.8, y: b.owner.pos.y + dir.y * 0.8 };
       b.vel = { x: 0, y: 0 };
+      b.z = 0;
+      b.vz = 0;
     } else {
       b.pos = { x: b.pos.x + b.vel.x * DT, y: b.pos.y + b.vel.y * DT };
-      const decay = 0.97 * (2 - this.wx.friction); // wetter/heavier ball slows faster
+      // VERTICAL PHYSICS: gravity acts on the ball; it bounces off the turf. The
+      // same rule governs every airborne ball — a lofted pass, a cross, a clipped
+      // shot — only the launch velocity differs.
+      if (b.z > 0 || b.vz !== 0) {
+        b.vz -= GRAVITY * DT;
+        b.z += b.vz * DT;
+        if (b.z <= 0) {
+          b.z = 0;
+          b.vz = b.vz < -1.5 ? -b.vz * 0.5 : 0; // bounce (restitution ~0.5) or settle
+        }
+      }
+      // a ball on the ground rolls and slows with friction; high in the air it
+      // keeps its pace (light drag only).
+      const airborne = b.z > 0.5;
+      const decay = airborne ? 0.992 : 0.97 * (2 - this.wx.friction);
       b.vel = { x: b.vel.x * decay, y: b.vel.y * decay };
     }
   }
@@ -2133,7 +2194,8 @@ export class Match {
       );
       if (nearGoal && gk && segDist(gk.pos, segStart, b.pos) < 4.6) {
         // on target = the shot's projected crossing point is between the posts
-        const onTarget = b.aimY > GOAL_Y_MIN && b.aimY < GOAL_Y_MAX;
+        // AND under the bar — a ball sailing over isn't a save, it's a miss.
+        const onTarget = b.aimY > GOAL_Y_MIN && b.aimY < GOAL_Y_MAX && b.aimZ < CROSSBAR;
         if (onTarget) {
           b.judged = true;
           const corner = Math.min(1, Math.abs(b.pos.y - 34) / 3.66);
@@ -2407,7 +2469,7 @@ export class Match {
     // behind a goal line — only a shot can become a goal; anything else is a
     // goal kick (open-play balls don't trickle in)
     if (b.pos.x <= 0) {
-      if (b.isShot && b.shooter?.team === 1 && b.pos.y >= GOAL_Y_MIN && b.pos.y <= GOAL_Y_MAX) {
+      if (b.isShot && b.shooter?.team === 1 && b.pos.y >= GOAL_Y_MIN && b.pos.y <= GOAL_Y_MAX && b.aimZ < CROSSBAR) {
         this.scoreGoal(1);
       } else {
         this.deadBall(b.isShot, 1, 0);
@@ -2415,7 +2477,7 @@ export class Match {
       return;
     }
     if (b.pos.x >= PITCH_LENGTH) {
-      if (b.isShot && b.shooter?.team === 0 && b.pos.y >= GOAL_Y_MIN && b.pos.y <= GOAL_Y_MAX) {
+      if (b.isShot && b.shooter?.team === 0 && b.pos.y >= GOAL_Y_MIN && b.pos.y <= GOAL_Y_MAX && b.aimZ < CROSSBAR) {
         this.scoreGoal(0);
       } else {
         this.deadBall(b.isShot, 0, 1);
@@ -2449,12 +2511,18 @@ export class Match {
   private deadBall(wasShot: boolean, attackTeam: 0 | 1, defTeam: 0 | 1): void {
     const b = this.ball;
     if (wasShot && b.shooter) {
+      // distinguish a ball sailing over the bar from one dragged wide (emergent
+      // from the shot's projected height) — and narrate it accordingly
+      const overBar = b.aimZ >= CROSSBAR;
       this.shotOutcomes.offtarget++;
+      if (overBar) this.shotOutcomes.over++;
       this.emit(
         "shot_off",
         attackTeam,
         b.shooter.name,
-        this.vary([`...just wide!`, `...off target.`, `${b.shooter.name} drags it wide.`, `...over the bar!`, `So close!`]),
+        overBar
+          ? this.vary([`...over the bar!`, `${b.shooter.name} skies it!`, `...high over the top!`, `He leans back and blazes it over!`])
+          : this.vary([`...just wide!`, `...off target.`, `${b.shooter.name} drags it wide.`, `...whistles past the post!`, `So close!`]),
       );
       // an off-target effort is sometimes deflected behind off a defender — a
       // corner, not a goal kick (a real-world source of corners)

@@ -121,6 +121,84 @@ const EMPH: Record<Group, Partial<Record<keyof Attrs, number>>> = {
 };
 
 /**
+ * Position-weighted attribute importance, FM-style: how much each attribute
+ * matters to a player in this position. Used to compute a single Current Ability
+ * (CA) readout — a weighted measure of "how much quality is packed into the
+ * attributes that matter for this role". Mirrors the FM idea that +1 Finishing
+ * is worth a lot of CA for a striker but almost nothing for a centre-back.
+ *
+ * Only the attributes that meaningfully drive a role carry weight; everything
+ * else gets a small baseline (BASE_W) so it still counts a little. Weights are
+ * relative — they're normalised when CA is computed, so they need not sum to
+ * anything in particular.
+ */
+const BASE_W = 0.4;
+const CA_WEIGHTS: Record<Group, Partial<Record<keyof Attrs, number>>> = {
+  GK: {
+    reflexes: 5, handling: 4, oneOnOnes: 3, aerialReach: 3, command: 3,
+    kicking: 2, positioning: 3, concentration: 2, composure: 2, anticipation: 2,
+    agility: 2, decisions: 2,
+  },
+  CB: {
+    marking: 5, tackling: 4, heading: 4, positioning: 4, strength: 3,
+    jumpingReach: 3, anticipation: 3, bravery: 2, concentration: 3, composure: 2,
+    pace: 2, decisions: 2, passing: 1,
+  },
+  FB: {
+    pace: 4, acceleration: 3, stamina: 4, crossing: 3, tackling: 3, marking: 3,
+    workRate: 3, positioning: 2, anticipation: 2, dribbling: 2, passing: 2,
+    decisions: 2, teamwork: 2,
+  },
+  DM: {
+    tackling: 4, marking: 3, positioning: 4, anticipation: 3, passing: 4,
+    decisions: 4, composure: 3, vision: 2, teamwork: 3, workRate: 3, stamina: 3,
+    strength: 2, concentration: 2,
+  },
+  CM: {
+    passing: 5, vision: 4, decisions: 4, technique: 3, composure: 3, teamwork: 3,
+    workRate: 3, stamina: 3, offTheBall: 2, dribbling: 2, longShots: 2,
+    anticipation: 2, firstTouch: 2,
+  },
+  WIDE: {
+    pace: 4, acceleration: 4, dribbling: 5, crossing: 4, technique: 3, agility: 3,
+    flair: 3, offTheBall: 3, firstTouch: 2, finishing: 2, stamina: 2, decisions: 2,
+  },
+  AM: {
+    vision: 5, passing: 4, technique: 4, dribbling: 4, flair: 4, decisions: 4,
+    composure: 3, offTheBall: 3, firstTouch: 3, longShots: 3, finishing: 2,
+    anticipation: 2,
+  },
+  ST: {
+    finishing: 6, composure: 4, offTheBall: 5, anticipation: 3, firstTouch: 3,
+    pace: 3, acceleration: 3, technique: 3, heading: 3, longShots: 2, dribbling: 2,
+    strength: 2, jumpingReach: 2, balance: 2,
+  },
+};
+
+/**
+ * Current Ability (CA) on FM's 1–200 scale: a position-weighted measure of a
+ * player's quality. It is derived purely from the existing attributes (the same
+ * numbers the match engine reads), so it adds no new authored data — it's a
+ * readout/scouting figure, not an input. Computed as the role-weighted average
+ * of the attributes (1–20), rescaled ×10 to 1–200.
+ *
+ * NOTE: this is intentionally the "cheap" half of FM's system — there is no
+ * Potential Ability, age or development yet (those belong with career mode).
+ */
+export function currentAbility(role: Role, attrs: Attrs): number {
+  const w = CA_WEIGHTS[groupOf(role)];
+  let sum = 0;
+  let wsum = 0;
+  for (const k of ATTR_KEYS) {
+    const weight = w[k] ?? BASE_W;
+    sum += attrs[k] * weight;
+    wsum += weight;
+  }
+  const avg = sum / wsum; // weighted mean attribute (1–20)
+  return Math.max(1, Math.min(200, Math.round(avg * 10)));
+}
+
+/**
  * Build a full attribute profile for a player from a single `overall` rating
  * (1–20) plus role-based emphasis, with optional explicit overrides for the
  * handful of standout attributes that define a real player.

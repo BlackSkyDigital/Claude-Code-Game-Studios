@@ -26,10 +26,14 @@ for (let s = 1; s <= N; s++) {
 }
 const pctOf = (o, tot) => Object.entries(o).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${(100 * v / tot).toFixed(0)}%`).join("  ");
 const totGoals = Object.values(chance).reduce((a, b) => a + b, 0) || 1;
+// "over" is a subset of offtarget — exclude it from the outcome total so the
+// four outcomes still sum to 100%, and report over-the-bar share separately.
+const over = out.over ?? 0; delete out.over;
 const totShots = Object.values(out).reduce((a, b) => a + b, 0) || 1;
 console.log(`=== FOOTBALL REVIEW over ${m2} matches (${(goals / m2).toFixed(2)} goals/match) ===`);
 console.log("GOALS by chance :", pctOf(chance, totGoals), "  (real: open-play/cross/through/cut-back/set-piece all meaningful)");
 console.log("GOALS by shot   :", pctOf(shot, totGoals), "  (real ~ foot ~75 / head ~18 / pen ~7)");
 console.log("SHOT outcomes   :", pctOf(out, totShots), "  (real ~ goal 10 / saved 25 / blocked 28 / off 37)");
+console.log(`  of off-target, OVER THE BAR ${(100 * over / (out.offtarget || 1)).toFixed(0)}% (${(over / m2).toFixed(1)}/match) — rest dragged wide`);
 console.log("\nEvents per match:");
 console.log(`  deflections ${(defl / m2).toFixed(1)} · own goals ${(og / m2).toFixed(2)} · handballs ${(hb / m2).toFixed(2)} · free kicks ${(fk / m2).toFixed(1)} · penalties ${(pen / m2).toFixed(2)} · corners ${(cor / m2).toFixed(1)}`);
