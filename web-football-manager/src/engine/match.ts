@@ -2163,8 +2163,12 @@ export class Match {
             else this.claim(gk);
             return;
           }
-          // not saved → goal-bound, but it may crash off the WOODWORK
-          if (this.rng.chance(0.04)) {
+          // not saved → goal-bound, but it may crash off the WOODWORK — emergent
+          // from the aim: a shot aimed near a post/the bar clips the frame far
+          // more often than one struck down the middle.
+          const nearPost = Math.min(Math.abs(b.aimY - GOAL_Y_MIN), Math.abs(b.aimY - GOAL_Y_MAX));
+          const woodP = clamp(0.008, 0.12, 0.11 * (1 - nearPost / 2.2));
+          if (this.rng.chance(woodP)) {
             this.shotOutcomes.woodwork++;
             this.emit("shot_off", shooter.team, shooter.name, this.vary([`...off the post!`, `...off the crossbar!`, `It rattles the woodwork!`, `Off the upright!`]));
             if (this.rng.chance(0.5)) {
@@ -2268,6 +2272,11 @@ export class Match {
         this.awardPenalty(b.shooter.team);
         return;
       }
+      // block vs deflection vs flies-past. (These are flat per-tick rates by
+      // design: a shot is exposed to a defender over several ticks, so the rate
+      // compounds into the realistic ~25% blocked — a single emergent formula
+      // here destabilises that. The shot's PATH after a deflection, however, IS
+      // emergent below.)
       const r = this.rng.next();
       if (r < 0.12) {
         claimant.stat.blocks++;
