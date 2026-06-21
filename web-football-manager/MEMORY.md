@@ -128,47 +128,76 @@ the end (~1–2 min); don't pile up multiple in the background. **Never**
 - **NEW — Current Ability (CA):** `currentAbility()` 1–200 + `tools/ca.mjs`.
   Ranks squads realistically: **MCI 169, ARS 167, LIV 166 … LEE 134, SUN 132,
   BUR 130**; player CAs land right (Rodri 184, Foden 179, Haaland 178).
+- **NEW — quality scales everywhere, no flattening/hard caps** (user directive):
+  audited the engine; the one genuine flattening (an UNMARKED header winning at a
+  flat 0.8) now scales with the attacker's aerial ability via `att/(att+k)`,
+  centred so a typical box forward still wins ~0.8. Everything else already uses
+  attribute ratios (take-on, tackle skill/retain, control, save, set-piece,
+  passing, movement `baseSpeed` from pace+accel). Remaining `clamp(...)` calls are
+  probability/per-tick rails (e.g. [0.15,0.95] control) that rarely bind — kept as
+  "laws of probability", not quality flatteners.
+- **NEW — off-the-ball midfield runs + midfielder-finished cut-backs:** central
+  mids (and DMs, less so) make **timed late runs** into the box/cut-back zone,
+  scaled by Off The Ball + mentality + getForward (no flat gate/cap). A cut-back
+  is now finished by the **arriving runner it was aimed at** (usually a mid),
+  not whoever's nearest — so midfield runs become midfield goals. Lifted **review
+  g/g 2.43 → 2.72** and **season g/g 2.43 → 2.62** with no dash inflation; goal
+  sources & shot outcomes textbook (goal 10 / saved 25 / blocked 24 / off 40).
 
-### Calibration snapshot (as of commit `3ad3774`)
+### Calibration snapshot (as of commit `~midfield runs`)
 | Check | Now | Target |
 |---|---|---|
-| Dash (MCI v LIV) g/g | ~2.8 | 2.5–3.1 ✅ |
-| Dash on-target % | ~39% | 30–38% (slightly high) |
+| Dash (MCI v LIV) g/g | ~3.1 | 2.5–3.1 ✅ |
+| Review (mixed) g/g | **2.72** ✅ | ~2.7 |
+| Season g/g | **2.62** (↑ from 2.43) | ~2.7 ✅-ish |
+| Champion points | **77** (↑ from 74) | ~84–90 ⚠️ still low |
+| Golden boot | **33** (↓ from 35) | ~25–29 ⚠️ still high |
+| Goal split by role | st 39 / **wide 50** / **mid 7** / def 4 | st 33 / wide 27 / mid 22 / def 14 |
+| Home/Draw/Away | **51 / 18 / 31** | ~44 / 24 / 31 ⚠️ draws low |
 | Over-the-bar | ~9% of off-target ✅ | realistic |
-| Season g/g | **2.44** | ~2.8 ⚠️ low |
-| Champion points | **75** | ~84–90 ⚠️ low |
-| Golden boot | ~35 | ~22–29 (better than old ~39) |
 
-Persistent harmless flags: `shots/match` (~32) and `ball in-flight %` (~36) read
-slightly HIGH — **pre-existing**, not from physics.
+Persistent harmless flags: `shots/match` (~33–35) and `ball in-flight %` (~36)
+read slightly HIGH — **pre-existing**, not from physics. Note season results are
+ONE season per seed (high variance — e.g. TOT champion, MCI 9th this run); use
+`tools/seasons.mjs` to average several before trusting any single placing.
 
 ---
 
 ## 6. Known issues / open problems (in priority order)
 
-1. **THE big one — midfield scores ~0–4% of goals (real ~20–25%).** Goals
-   over-concentrate on strikers/wide forwards because the spatial model routes
-   the final third through the wings (auto cross/cut-back). Consequences:
-   **league g/g low (2.44), champions can't pull away (75 pts, too many draws),
-   through-ball goals ~1% (real ~8%).** This is the single biggest accuracy gap.
-   The real fix is **off-the-ball midfield runs + central/through-ball routing**
-   (CMs arriving in the box, third-man runs, overlaps), not a probability tweak.
-   8+ earlier probability tweaks failed/destabilised — don't retry those; do the
-   positional-play work.
-2. **Cut-back over-counted** — many close-range first-time finishes tagged
+1. **THE big one — WIDE forwards score ~50% of goals (real ~27%); midfield only
+   ~7% (real ~22%).** Partly improved (mid was ~4%, league g/g now realistic) by
+   the midfield-runs + cut-back changes, but wingers still take ~52% of shots:
+   the spatial model routes the final third to wide forwards who cut inside and
+   **shoot themselves**. Next levers to try (carefully, preserving g/g 2.7):
+   (a) when a wide/inverted player is in a shooting spot AND a central runner is
+   better placed, prefer to feed him (cut-back/pass) over shooting; (b) make
+   central mids occupy the advanced half-space "shooting" support slots so they
+   receive there, pushing wingers wider to cross; (c) raise through-ball usage
+   (through-ball goals still ~1% vs real ~8%). **Do positional/movement work, not
+   probability tweaks** — 8+ earlier probability tweaks failed/destabilised.
+2. **Secondary from #1:** champion points still ~77 (real ~85+) and draws dipped
+   to ~18% (home wins ~51%) when scoring rose — once goals spread to midfield and
+   the wide over-shooting is reined in, the strong teams should pull away more and
+   the result split should re-balance. Consider a small home-edge / finishing trim
+   if draws stay low after the role split is fixed.
+4. **Cut-back over-counted** — many close-range first-time finishes tagged
    "cut-back", inflating that category.
-3. Dash on-target ~39% slightly above the 30–38 band.
+5. Dash on-target ~39% slightly above the 30–38 band.
 
 ---
 
 ## 7. Roadmap — what's next
 
-**Immediate next stage (recommended):** *off-the-ball midfield & central routing*
-— make central midfielders make timed runs into the box and become genuine
-shooting/scoring options; increase through-ball usage. Target outcomes: league
-g/g → ~2.7, champion → ~84+, midfield goal share → ~20%, through-ball goals
-→ ~8%, **without** re-inflating the golden boot. Verify with `roles.mjs` (goals
-by position), `review.mjs`, `season.mjs`, `dash.mjs` at each step.
+**Immediate next stage (IN PROGRESS):** *off-the-ball midfield & central routing.*
+Done so far: timed central-midfield runs + midfielder-finished cut-backs (league
+g/g now realistic, mid 4%→7%). **Still to do — rein in wide over-shooting** so
+the role split reaches st 33 / wide 27 / mid 22 / def 14: see Known Issue #1
+levers (feed central runners over winger self-shots; mids into half-space
+shooting slots; more through-balls). Target: midfield goal share → ~20%,
+through-ball goals → ~8%, champion → ~84+, draws back to ~24%, **without**
+re-inflating the golden boot or g/g. Verify with `roles.mjs`, `review.mjs`,
+`dash.mjs` each step; `season.mjs`/`seasons.mjs` (slow, ~6 min) for the league.
 
 **Physics layer remaining (Phase 3 C/D):** migrate aerial duels/control to true
 height (a ball above a control height can't be brought down cleanly) — note
