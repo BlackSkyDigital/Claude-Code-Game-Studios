@@ -35,6 +35,24 @@ export interface MatchSetup {
   awayFormation?: string | Slot[];
   weather?: Weather;
   neutral?: boolean;
+  /** match context — global "laws" that modulate the same decision rules
+   * (sharpness, aggression, tempo) the way the real game does. All default to
+   * neutral, so omitting this reproduces the calibrated baseline exactly. */
+  context?: MatchContext;
+}
+
+/** Context that adjusts the whole match coherently, like real football. Each is
+ * a small global modifier on the universal decision rules — not special-case
+ * code — so the same engine "scales" with the occasion. */
+export interface MatchContext {
+  /** derby / rivalry intensity 0..1 — scrappier, more fouls & cards, louder crowd */
+  rivalry?: number;
+  /** stakes 0 dead-rubber .. 0.5 normal league .. 1 cup final / title decider —
+   * cagier, more nervous, bigger crowd */
+  importance?: number;
+  /** pre-match form & confidence per side, -1 wretched .. +1 flying */
+  homeMorale?: number;
+  awayMorale?: number;
 }
 
 const DT = 0.1; // simulation seconds per step
@@ -290,6 +308,14 @@ export class Match {
   private weather: Weather;
   private wx: WeatherMods;
   private edge: HomeEdge;
+  // ---- match context (global "laws" that scale the same decision rules) ----
+  private rivalry = 0; // 0..1 derby intensity
+  private atmosphere = 0; // crowd intensity (from rivalry + importance) — lifts home, unsettles away
+  private importance = 0.5; // 0..1 stakes
+  private ctxMorale: [number, number] = [0, 0]; // pre-match form/confidence per side
+  /** dynamic in-match momentum per side, -1..1 — swings on goals & big moments,
+   * decays over time; a side "on top" plays sharper. */
+  momentum: [number, number] = [0, 0];
 
   time = 0;
   score: [number, number] = [0, 0];
@@ -315,6 +341,13 @@ export class Match {
     this.weather = setup.weather ?? "clear";
     this.wx = weatherMods(this.weather);
     this.edge = homeEdge(setup.neutral ?? false);
+    const ctx = setup.context ?? {};
+    this.rivalry = clamp(ctx.rivalry ?? 0, 0, 1);
+    this.importance = clamp(ctx.importance ?? 0.5, 0, 1);
+    this.ctxMorale = [clamp(ctx.homeMorale ?? 0, -1, 1), clamp(ctx.awayMorale ?? 0, -1, 1)];
+    // a normal league game (importance 0.5, no rivalry) has neutral atmosphere;
+    // derbies and big occasions crank it up.
+    this.atmosphere = clamp(this.rivalry * 0.6 + Math.max(0, this.importance - 0.5) * 1.2, 0, 1);
     this.setupPlayers();
     this.ball = {
       pos: { ...CENTER },
@@ -478,10 +511,23 @@ export class Match {
     return p.baseSpeed * (0.62 + 0.38 * p.condition) * burst;
   }
 
-  /** Execution sharpness 0..~1.1 — fatigue lowers it, home advantage lifts it. */
+  /** Execution sharpness 0..~1.1 — the universal execution-quality term. Fatigue
+   * lowers it; home advantage, pre-match morale, in-match momentum and the crowd
+   * all lift/dent it. Every context "law" feeds this same rule (all neutral by
+   * default, so the calibrated baseline is unchanged). */
   private sharp(p: Player): number {
     const homeBoost = p.team === 0 ? this.edge.homeSharpness : 1;
-    return (0.7 + 0.3 * p.condition) * homeBoost;
+    const morale = 1 + this.ctxMorale[p.team] * 0.06; // ±6% from form/confidence
+    const mom = 1 + this.momentum[p.team] * 0.04; // ±4% from in-match momentum
+    // a big crowd lifts the home side and unsettles the away side
+    const atm = p.team === 0 ? 1 + this.atmosphere * 0.05 : 1 - this.atmosphere * 0.035;
+    return (0.7 + 0.3 * p.condition) * homeBoost * morale * mom * atm;
+  }
+
+  /** Foul-rate multiplier from context: derbies and high-stakes games are
+   * scrappier and more cautious. Neutral (1.0) for a normal, no-rivalry game. */
+  private contextFoulMul(): number {
+    return 1 + this.rivalry * 0.5 + Math.max(0, this.importance - 0.5) * 0.4;
   }
 
   /** Effective directness for a team, nudged up by wet weather. */
@@ -666,6 +712,7 @@ export class Match {
     }
     let yellowP = 0.058 + fouler.attrs.aggression / 200;
     if (dangerous) yellowP += 0.08; // stopping a promising move
+    yellowP *= 1 + this.rivalry * 0.5; // derbies are niggly — more bookings
     // a player already on a yellow is booked again far less readily — refs (and
     // the player) are wary of a second — so second-yellow reds stay rare
     if (fouler.yellow) yellowP *= 0.3;
@@ -765,6 +812,9 @@ export class Match {
       return;
     }
     this.time += DT;
+    // momentum decays back toward neutral over a few minutes
+    this.momentum[0] *= 0.9995;
+    this.momentum[1] *= 0.9995;
     if (this.ball.cooldown > 0) this.ball.cooldown -= DT;
     if (this.ball.airTimer > 0) this.ball.airTimer -= DT;
     for (const p of this.players) if (p.dribbleTimer > 0) p.dribbleTimer -= DT;
@@ -1277,6 +1327,7 @@ export class Match {
       if (this.inFinalThird(owner)) foulP *= 1.3;
       if (this.inBoxAttacking(owner)) foulP *= 0.05; // defenders are very careful in the box
       foulP *= foulAggro;
+      foulP *= this.contextFoulMul(); // derbies / high-stakes games are scrappier
       if (this.rng.chance(foulP)) {
         this.commitFoul(challenger, owner);
         return;
@@ -1434,7 +1485,7 @@ export class Match {
       this.sharp(challenger);
     if (this.rng.chance(beat / (beat + stop))) {
       // the beaten defender may cynically haul him down instead of letting him go
-      if (this.rng.chance(0.02 + challenger.attrs.aggression / 500)) {
+      if (this.rng.chance((0.02 + challenger.attrs.aggression / 500) * this.contextFoulMul())) {
         this.commitFoul(challenger, owner);
         return;
       }
@@ -2442,6 +2493,10 @@ export class Match {
     this.celebrateTimer = 2.4;
     this.celebrateScorer = shooter ?? null;
     this.pendingKickoff = (1 - team) as 0 | 1;
+    // a goal swings momentum: the scorers ride it, the conceders are rocked
+    const opp = (1 - team) as 0 | 1;
+    this.momentum[team] = clamp(this.momentum[team] + 0.4, -1, 1);
+    this.momentum[opp] = clamp(this.momentum[opp] - 0.4, -1, 1);
   }
 
   /** Brief goal celebration: the scorer wheels away toward the corner and his

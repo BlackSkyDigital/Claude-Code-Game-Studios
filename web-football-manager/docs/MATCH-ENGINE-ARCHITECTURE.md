@@ -104,12 +104,42 @@ The architecture is right; these are depth gaps to invest in (not a rewrite):
 3. **Off-the-ball intelligence.** FM's biggest realism lever. We have runs in
    behind, support angles, duty and drift; we still lack checking-to-feet,
    third-man runs, overlaps/underlaps and true cover-shadow awareness.
-4. **Hidden context layers.** Morale, confidence, momentum, match sharpness and
-   pitch condition all feed FM decisions; we model fatigue, weather and home
-   edge but not the psychological/condition layers.
+4. **Hidden context layers.** ~~Morale, confidence, momentum…~~ **Added (context
+   layer).** See below.
 5. **Role & duty depth.** We have duty + trait-driven roles; FM has dozens of
    roles each switching distinct behaviours (target-man hold-up, false-nine
    dropping, libero stepping out).
+
+## The "universal laws" layer (context that scales the whole match)
+
+The engine is deliberately **one rule set, scaled by inputs** — every action is
+`base × weighted-attributes × situational-modifiers + RNG`, run by 22 local
+agents. On top of the per-action modifiers (tactics, weather, fatigue, home edge)
+there is now a **match-context layer** of global "laws" that adjust the whole
+game coherently, exactly like real football — each is just another multiplier on
+the *same* universal rules (chiefly `sharp()`, the execution-quality term, and
+the foul/card rates), and **all are neutral by default** so the calibrated
+baseline is unchanged:
+
+- **Rivalry** (derby intensity) — scrappier: more fouls & cards, louder crowd.
+- **Importance** (stakes: dead rubber → cup final) — cagier, more fouls, bigger
+  crowd pressure.
+- **Crowd / atmosphere** (derived from rivalry + importance) — lifts the home
+  side's sharpness, unsettles the away side.
+- **Morale / form** (pre-match, per side) — a side in form plays sharper.
+- **Momentum** (in-match, dynamic) — swings on goals and decays over a few
+  minutes; a side "on top" plays marginally sharper. Emergent, not scripted.
+
+Verified with `tools/context.mjs`: the same engine produces a 30-foul / 6-card
+derby, a tenser cup final, and a ±0.7-goal swing between a side flying and a side
+in crisis — purely from context inputs, no special-case code. This is the
+"universal laws that adjust naturally" design: one rule set, many dials.
+
+Still to do toward that ideal (in order): refactor the remaining hardcoded
+event probabilities (deflection/woodwork/handball/set-piece rates) so they
+*emerge* from attributes/geometry rather than magic numbers, then add a light
+**Z-axis ball-physics layer** so aerial play, deflections and bounces come from
+one physics rule (gap #1 above).
 
 ## Recommendation
 
